@@ -1,0 +1,20 @@
+---
+description: Minimal scope for the future Phalanx skill repository
+alwaysApply: false
+---
+
+# Phalanx Skill Scope
+
+Current status:
+- This repo is a reserved boundary for future Phalanx-side skill and action-plane work.
+- Until implementation starts, keep rules here high-level and avoid locking in concrete module structure.
+
+When implementation begins, this repo will own:
+- Wallet interactions, signing authority, execution planning, and action orchestration.
+- x402 client behavior, payment authorization flow, and action safety checks.
+- Backend integration that supports action execution without taking over backend responsibilities.
+
+This repo does not own:
+- Mongo access, user database, backend session issuance, or identity management.
+- Browser pages, frontend presentation, or user-facing app state.
+- Generic market-data fetchers or normal API response shaping that belong in backend.

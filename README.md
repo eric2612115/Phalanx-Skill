@@ -1,19 +1,17 @@
-# OmRate Skill
+# Phalanx Skill
 
-Isolated skill/action-plane repository for OmRate hackathon submission.
+Isolated future skill/action-plane repository intended to integrate with Phalanx.
 
 ## Purpose
 
-This repository is reserved for the agent-facing execution layer that should not
-be mixed into the normal OmRate frontend or backend data-plane code.
+This repository is reserved for the future agent-facing execution layer that should
+not be mixed into the normal OmRate frontend or backend data-plane code.
 
-## Intended scope
+## Current status
 
-- Agent wallet and signing flows
-- x402 payment and settlement integrations
-- Execution-channel adapters
-- Stable action interfaces that call OmRate backend APIs
-- Policy-aware orchestration for agent actions
+This repository is intentionally not under active implementation yet. It is being
+kept as the future home for the Phalanx-side skill that will call OmRate APIs and
+handle x402 payment flows when Phalanx itself is ready.
 
 ## Out of scope
 
@@ -22,23 +20,16 @@ be mixed into the normal OmRate frontend or backend data-plane code.
 - Direct database access
 - Reimplementing backend auth or persistence
 
-## Suggested starting structure
+## Expected future scope
 
-When implementation starts, keep a clean module boundary such as:
-
-- `src/skill/clients/`: calls into OmRate backend APIs
-- `src/skill/wallets/`: wallet providers and signing
-- `src/skill/payments/`: x402 and payment-channel integrations
-- `src/skill/policies/`: action-policy checks
-- `tests/`: isolated execution and adapter tests
+- Agent wallet and signing flows
+- x402 payment and settlement integrations
+- Execution-channel adapters
+- Stable action interfaces that call OmRate backend APIs
+- Policy-aware orchestration for agent actions
 
 ## Relationship to other repositories
 
 - `OmRate-Backend`: data plane, auth, DB, admin, API source of truth
 - `OmRate-frontend`: user-facing product UI
-- `OmRate-Skill`: dedicated action plane for hackathon and future agent work
-
-## Status
-
-This repo currently contains a clean skeleton only. Implementation should begin
-here instead of being mixed back into the frontend or backend repositories.
+- `Phalanx-Skill`: future action-plane repo, to be implemented after Phalanx core is ready

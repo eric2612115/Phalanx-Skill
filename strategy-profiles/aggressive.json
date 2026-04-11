@@ -1,0 +1,17 @@
+{
+  "profileId": "aggressive",
+  "schemaVersion": 1,
+  "riskLevel": "aggressive",
+  "allocations": {
+    "stable": 0.2,
+    "eth": 0.5,
+    "alts": 0.3
+  },
+  "allowedProtocols": [
+    "aave-v3",
+    "compound-v3",
+    "uniswap-v3",
+    "pancakeswap-v3"
+  ],
+  "rebalanceThresholdBps": 150
+}

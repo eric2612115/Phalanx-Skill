@@ -1,0 +1,31 @@
+{
+  "name": "phalanx-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "smoke:live": "tsx scripts/live-smoke.ts",
+    "smoke:morpho": "tsx scripts/morpho-live-smoke.ts",
+    "smoke:x402": "tsx scripts/x402-live-smoke.ts",
+    "smoke:telegram-approval": "tsx scripts/telegram-approval-live-smoke.ts",
+    "review:docker:onchainos": "tsx scripts/review-onchainos-docker.ts",
+    "review:docker:uniswap": "tsx scripts/review-uniswap-docker.ts",
+    "review:docker:all": "npm run review:docker:onchainos && npm run review:docker:uniswap"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.8"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@x402/fetch": "^2.9.0",
+    "grammy": "^1.42.0",
+    "viem": "^2.47.10",
+    "zod": "^4.3.6"
+  }
+}

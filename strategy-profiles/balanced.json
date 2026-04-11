@@ -1,0 +1,16 @@
+{
+  "profileId": "balanced",
+  "schemaVersion": 1,
+  "riskLevel": "balanced",
+  "allocations": {
+    "stable": 0.45,
+    "eth": 0.4,
+    "alts": 0.15
+  },
+  "allowedProtocols": [
+    "aave-v3",
+    "compound-v3",
+    "uniswap-v3"
+  ],
+  "rebalanceThresholdBps": 200
+}

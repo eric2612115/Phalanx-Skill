@@ -1,13 +1,13 @@
 ---
-description: Minimal index for the future Phalanx skill repository
+description: Index for the Phalanx-Skill action-plane repository
 alwaysApply: true
 ---
 
 # Phalanx Skill Index
 
-`Phalanx-Skill` is reserved for future action-plane work and is not implemented yet.
+`Phalanx-Skill` is the **active** action-plane repo for wallet execution, signing, x402-related flows, and orchestration against OmRate backend APIs.
 
 Always read `repo-scope.mdc` before making changes here.
-Read `operational-checks.mdc` for activation criteria, env changes, or integration-doc updates.
+Read `operational-checks.mdc` for local checks, env changes, or integration-doc updates.
 
 If work here changes cross-repo trust boundaries or ownership, update the shared root rules too.

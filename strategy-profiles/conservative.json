@@ -1,0 +1,15 @@
+{
+  "profileId": "conservative",
+  "schemaVersion": 1,
+  "riskLevel": "conservative",
+  "allocations": {
+    "stable": 0.75,
+    "eth": 0.2,
+    "alts": 0.05
+  },
+  "allowedProtocols": [
+    "aave-v3",
+    "compound-v3"
+  ],
+  "rebalanceThresholdBps": 300
+}

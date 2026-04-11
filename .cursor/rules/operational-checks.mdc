@@ -1,17 +1,17 @@
 ---
-description: Activation and documentation checks for the future Phalanx skill repo
+description: Operational checks for the Phalanx-Skill action-plane repo
 alwaysApply: false
 ---
 
 # Operational Checks
 
-Before this repo has real implementation:
-- Keep only boundary, ownership, and activation guidance here.
-- Do not add speculative file layouts, wallet flow steps, or x402 implementation details.
+During active development:
+- Run `npm run test` after meaningful changes; use `npm run build` when touching TypeScript config or exports.
+- Keep `README.md` and this file consistent with required tooling (scripts, env assumptions) as they evolve.
 
 Update docs when any of the following changes:
-- The repo becomes active development work.
 - Required env vars, backend endpoints, or integration assumptions change.
 - Cross-repo ownership, trust boundaries, or handoff points change.
+- New mandatory checks are added to CI or local workflow.
 
 Never commit secrets, wallet material, or real operational credentials.

@@ -135,6 +135,11 @@ describe("MCP cross-channel approval", () => {
     if (!out.ok) throw new Error("expected pending approval");
     expect(out.data.kind).toBe("pending_approval");
     expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("Requested action: swap");
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain(
+      "Blocked target: 0x1111111111111111111111111111111111111111",
+    );
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("If approved: add the target to WhitelistPolicy and then resume the original action.");
     expect(deps.approvalRouter.size()).toBe(1);
   });
 
@@ -156,6 +161,75 @@ describe("MCP cross-channel approval", () => {
     if (!out.ok) throw new Error("expected ok");
     expect(out.data.kind).toBe("pending_approval");
     expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("Requested action: requestWhitelistExpansion");
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("Blocked target: uniswap-v3");
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("Why approval is needed: this target is not currently allowlisted.");
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("If approved: add the target to WhitelistPolicy.");
+    expect(deps.approvalRouter.size()).toBe(1);
+  });
+
+  it("formats LP whitelist approvals with human-readable liquidity wording", async () => {
+    const notify = vi.fn<TelegramApprovalNotifier["sendApprovalRequest"]>(async () => ({ ok: true }));
+    const deps = makeMcpDeps({
+      telegramApproval: { sendApprovalRequest: notify },
+      whitelistTargets: ["whitelist-admin"],
+      approvalNotifyTimeoutMs: 200,
+    });
+
+    const out = await invokePhalanxMcpTool(
+      "phalanx_action",
+      {
+        action: "depositLpPosition",
+        target: "uniswap-v3",
+        payload: {
+          protocol: "uniswap-v3",
+          investmentId: "uniswap-base-weth-usdc-v3",
+          chain: "base",
+          token: "USDC",
+          amount: "1000000",
+        },
+      },
+      deps,
+    );
+
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("expected pending approval");
+    expect(out.data.kind).toBe("pending_approval");
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("Requested action: add liquidity (LP deposit)");
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("Blocked target: uniswap-v3");
+  });
+
+  it("routes withdrawToOwner directly into Telegram approval without whitelist expansion", async () => {
+    const notify = vi.fn<TelegramApprovalNotifier["sendApprovalRequest"]>(async () => ({ ok: true }));
+    const deps = makeMcpDeps({
+      telegramApproval: { sendApprovalRequest: notify },
+      whitelistTargets: ["pool"],
+      approvalNotifyTimeoutMs: 200,
+    });
+
+    const out = await invokePhalanxMcpTool(
+      "phalanx_action",
+      {
+        action: "withdrawToOwner",
+        payload: {
+          chain: "base",
+          token: "USDC",
+          amount: "1",
+        },
+      },
+      deps,
+    );
+
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("expected pending approval");
+    expect(out.data.kind).toBe("pending_approval");
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("Requested action: withdraw to owner");
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain(
+      "Why approval is needed: this action requires explicit approval before execution continues.",
+    );
+    expect(notify.mock.calls[0]?.[0]?.summary).toContain("Target: n/a");
     expect(deps.approvalRouter.size()).toBe(1);
   });
 

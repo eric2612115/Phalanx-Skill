@@ -35,7 +35,7 @@ describe("policy item registry", () => {
       displayName: "PancakeSwap V3",
       policyItemSeed: "pancakeswap-v3",
       chainScope: [],
-      actionScope: ["swap", "deposit", "withdraw"],
+      actionScope: ["swap", "depositLpPosition", "withdrawLpPosition"],
       assetScope: [],
       executionTargets: [],
       riskNotes: [],

@@ -3,6 +3,7 @@ import { Bot, InlineKeyboard } from "grammy";
 import type { PhalanxHost } from "../app/host.js";
 import type { TelegramReportNotifier } from "../app/host.js";
 import type { RuntimeEvent } from "../runtime/events.js";
+import { describeRuntimeAction } from "../runtime/action-labels.js";
 import type { TelegramApprovalNotifier, TelegramApprovalNotifierResult } from "../mcp/server.js";
 
 type SendMessageExtra = {
@@ -103,7 +104,7 @@ function callbackSummary(result: Awaited<ReturnType<PhalanxHost["handleTelegramC
         ? (result.runtimeOutcome.adapterResult as Record<string, unknown>)
         : undefined;
     if (adapterResult?.mode === "whitelist_governance_completed" && typeof adapterResult.resumedAction === "string") {
-      return `Approved. Whitelist updated and ${adapterResult.resumedAction} resumed.`;
+      return `Approved. Whitelist updated and ${describeRuntimeAction(adapterResult.resumedAction)} resumed.`;
     }
     return "Approved. Action resumed through RuntimeCore and executed.";
   }

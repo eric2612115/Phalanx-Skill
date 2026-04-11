@@ -5,6 +5,7 @@ import type { PendingOperationsTracker } from "../../runtime/pending-operations.
 import type { PolicyContext } from "../../runtime/types.js";
 import type { RuntimeIntent } from "../../runtime/types.js";
 import { isStateChangingAction } from "../../runtime/intents.js";
+import { describeRuntimeAction } from "../../runtime/action-labels.js";
 import type { McpToolResult, TelegramApprovalNotifier } from "../server.js";
 import { asRecord } from "../tool-args.js";
 
@@ -58,7 +59,12 @@ function summarizeIntent(intent: RuntimeIntent): string {
   const target = intent.target ?? "";
   const payloadPreview = JSON.stringify(intent.payload);
   const clipped = payloadPreview.length > 200 ? `${payloadPreview.slice(0, 200)}…` : payloadPreview;
-  return `MCP requested ${intent.action}${target ? ` target=${target}` : ""} payload=${clipped}`;
+  return [
+    `Requested action: ${describeRuntimeAction(intent.action)}`,
+    `Target: ${target || "n/a"}`,
+    `Payload preview: ${clipped}`,
+    "Why approval is needed: this action requires explicit approval before execution continues.",
+  ].join("\n");
 }
 
 function formatNotifierError(error: unknown): string {
@@ -69,9 +75,16 @@ function formatNotifierError(error: unknown): string {
 }
 
 function preferredExecutionTarget(
+  action: string,
   argsTarget: unknown,
   payload: Readonly<Record<string, unknown>>,
-): string {
+): string | undefined {
+  if (action === "withdrawToOwner" || action === "sweepToOwner") {
+    if (typeof argsTarget === "string" && argsTarget.length > 0) {
+      return argsTarget;
+    }
+    return undefined;
+  }
   if (typeof argsTarget === "string" && argsTarget.length > 0) {
     return argsTarget;
   }
@@ -98,6 +111,41 @@ function preferredContractAddress(
     return argsTarget.trim();
   }
   return undefined;
+}
+
+function asRuntimeIntent(value: unknown): RuntimeIntent | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const candidate = value as Partial<RuntimeIntent>;
+  if (typeof candidate.action !== "string") {
+    return undefined;
+  }
+  return candidate as RuntimeIntent;
+}
+
+function summarizeWhitelistApproval(intent: RuntimeIntent): string {
+  const payload = asRecord(intent.payload);
+  const originalIntent = asRuntimeIntent(payload.originalIntent);
+  const requestedAction = originalIntent?.action ?? intent.action;
+  const blockedTarget =
+    (typeof payload.target === "string" && payload.target.trim().length > 0
+      ? payload.target.trim()
+      : originalIntent?.target?.trim()) || intent.target || "target";
+  const lines = [
+    `Requested action: ${describeRuntimeAction(requestedAction)}`,
+    `Blocked target: ${blockedTarget}`,
+    "Why approval is needed: this target is not currently allowlisted.",
+  ];
+  if (typeof payload.contractAddress === "string" && payload.contractAddress.trim().length > 0) {
+    lines.push(`Contract address: ${payload.contractAddress.trim()}`);
+  }
+  lines.push(
+    originalIntent
+      ? "If approved: add the target to WhitelistPolicy and then resume the original action."
+      : "If approved: add the target to WhitelistPolicy.",
+  );
+  return lines.join("\n");
 }
 
 export async function invokeActionTool(args: Record<string, unknown>, deps: ActionToolDeps): Promise<McpToolResult> {
@@ -130,7 +178,7 @@ export async function invokeActionTool(args: Record<string, unknown>, deps: Acti
     action,
     payload,
     entrySource: "mcp",
-    target: preferredExecutionTarget(args.target, payload),
+    target: preferredExecutionTarget(action, args.target, payload),
   };
 
   const out = await deps.core.handleIntent(intent);
@@ -188,7 +236,7 @@ export async function invokeActionTool(args: Record<string, unknown>, deps: Acti
           () =>
             deps.telegramApproval!.sendApprovalRequest({
               approvalId,
-              summary: `Approval required to whitelist ${intent.target ?? "target"} before continuing ${intent.action}.`,
+              summary: summarizeWhitelistApproval(governanceIntent),
             }),
           deps.approvalNotifyTimeoutMs,
         );
@@ -250,7 +298,7 @@ export async function invokeActionTool(args: Record<string, unknown>, deps: Acti
       () =>
         deps.telegramApproval!.sendApprovalRequest({
           approvalId,
-          summary: summarizeIntent(intent),
+          summary: intent.action === "requestWhitelistExpansion" ? summarizeWhitelistApproval(intent) : summarizeIntent(intent),
         }),
       deps.approvalNotifyTimeoutMs,
     );

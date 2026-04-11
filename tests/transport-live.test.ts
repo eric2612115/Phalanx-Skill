@@ -14,13 +14,14 @@ describe("telegram live transport", () => {
 
     const result = await notifier.sendApprovalRequest({
       approvalId: "approval-1",
-      summary: "approve deposit",
+      summary: "Requested action: deposit\nBlocked target: pancakeswap-v3",
     });
 
     expect(result.ok).toBe(true);
     expect(sent).toHaveLength(1);
     expect(sent[0]?.chatId).toBe(42);
-    expect(sent[0]?.text).toContain("approve deposit");
+    expect(sent[0]?.text).toContain("Requested action: deposit");
+    expect(sent[0]?.text).toContain("Blocked target: pancakeswap-v3");
     expect(sent[0]?.extra?.reply_markup).toBeTruthy();
   });
 

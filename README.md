@@ -108,6 +108,8 @@ The current runtime is live-capable, but it still degrades safely when credentia
 - `OMRATE_API_KEY`, `OMRATE_API_BASE_URL`
 - `XLAYER_RPC_URL`, `BASE_RPC_URL`
 - `POLICY_OWNER_KEY`, `WHITELIST_POLICY_ADDRESS`
+- `PHALANX_OWNER_EVM_ADDRESS` for `withdrawToOwner / sweepToOwner`
+- `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS` for live execution address selection
 
 Optional live toggles:
 
@@ -115,6 +117,11 @@ Optional live toggles:
 - `PHALANX_EXECUTION_BACKEND=onchainos_skill` to route state-changing execution through the skill-backed executor instead of the dry-run fallback
 - `PHALANX_X402_PAYMENT_ENABLED=1` with private key env to attempt x402-wrapped fetch paths
 - protocol-specific env for Uniswap / Pancake quote or position reads
+- `PHALANX_BASE_GAS_RESERVE_WEI` / `PHALANX_XLAYER_GAS_RESERVE_WEI` for owner sweep gas buffers
+
+`TEST_WALLET_ADDRESS` should be treated as a dry-run / synthetic fallback only. In live mode, the skill-backed executor now prefers `PHALANX_WALLET_ADDRESS` or `AGENT_WALLET_ADDRESS`.
+
+Before any real live execution, first transfer small test funds into the OKX Agentic Wallet and verify receipt with `onchainos wallet balance`.
 
 ## Live smoke
 
@@ -136,8 +143,8 @@ This verifies:
 - startup summary
 - MCP status path
 - portfolio read when READY
-- allowlisted execution path for a fixed policy item such as `uniswap-v3` without manual approval
-- governance approval path for a blocked fixed policy item such as `pancakeswap-v3` -> Telegram callback -> RuntimeCore resume
+- blocked Uniswap LP approval path -> Telegram callback -> RuntimeCore resume
+- owner-withdraw approval path -> Telegram callback -> RuntimeCore resume
 - skill readiness snapshots for `onchainos` and `Uniswap liquidity-planner`
 
 Short-term demo governance is intentionally modeled around fixed policy items such as `aave-v3`, `morpho-vaults`, `uniswap-v3`, `pancakeswap-v3`, and `whitelist-admin`. This is the compatibility layer that will later evolve into agent-managed policy bundles without rewriting the current approval plumbing.

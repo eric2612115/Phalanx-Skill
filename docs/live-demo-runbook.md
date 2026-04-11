@@ -17,6 +17,8 @@ Minimum fields for real live mode:
 - `XLAYER_RPC_URL`
 - `POLICY_OWNER_KEY`
 - `WHITELIST_POLICY_ADDRESS`
+- `PHALANX_OWNER_EVM_ADDRESS`
+- `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS`
 
 Optional:
 
@@ -25,6 +27,10 @@ Optional:
 - `PHALANX_GUARDIAN_INTERVAL_MS=60000`
 - `PHALANX_EVENT_STORE_PATH=.phalanx-runtime-events.json`
 - x402 / Uniswap / Pancake env values for payment and LP quote/read paths
+- `PHALANX_BASE_GAS_RESERVE_WEI`
+- `PHALANX_XLAYER_GAS_RESERVE_WEI`
+
+`TEST_WALLET_ADDRESS` is now a dry-run / synthetic fallback only. Real live execution should point at the current OKX Agentic Wallet via `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS`.
 
 ## 2. Re-run installer review before host-side third-party use
 
@@ -49,6 +55,14 @@ Expected:
 - readiness shows missing fields or `liveReady: true`
 - `phalanx_status` path returns successfully
 
+## 3.5 Fund the Agentic Wallet before real execution
+
+Before any real live execution:
+
+1. transfer a small amount of test funds into the OKX Agentic Wallet address
+2. confirm the active wallet and balances with `onchainos wallet balance`
+3. only then continue to LP / x402 / owner-withdraw live checks
+
 ## 4. Verify orchestration path without real funds
 
 ```bash
@@ -58,11 +72,13 @@ PHALANX_SMOKE_SYNTHETIC_READY=1 npm run smoke:live
 Expected:
 
 - portfolio path executes
-- allowlisted `swap` action executes immediately
-- whitelist/governance action returns `pending_approval`
+- `phalanx_uniswap_liquidity_plan` returns planner evidence plus `runtimeDownstream.executionAction=depositLpPosition`
+- blocked `depositLpPosition` on `uniswap-v3` returns `pending_approval`
 - approval callback data is generated
-- callback resumes the governance action through `RuntimeCore`
+- callback resumes the LP execution lane through `RuntimeCore`
+- `withdrawToOwner` also returns `pending_approval` and resumes after callback
 - smoke output includes `skillReadiness` for `onchainos`, `Uniswap liquidity-planner` discovery/plan, and `uniswapPlannerExecution` (official `SKILL.md` load + validation when `PHALANX_UNISWAP_SKILL_ROOT` points at an installed `Uniswap/uniswap-ai` tree)
+- smoke output also includes a `pancakeswapOnchainos` capability probe so Pancake LP support can be assessed without changing the main demo line
 
 ## 5. Start runtime host
 
@@ -93,16 +109,17 @@ When `TELEGRAM_BOT_TOKEN` is valid and `PHALANX_RUNTIME_MODE=live`:
 
 ## 7. Real onchainos / OmRate / whitelist / LP verification
 
-Run these incrementally with test wallets and small amounts:
+Run these incrementally with test wallets and small amounts already deposited into the Agentic Wallet:
 
 1. onchainos capability probe and confirm `payment x402-pay` / `swap execute` are present
 2. portfolio read
 3. whitelist live check
-4. whitelist expansion for a fixed policy item such as `pancakeswap-v3` -> Telegram approval -> callback resume
+4. whitelist expansion for the blocked `uniswap-v3` LP route -> Telegram approval -> callback resume
 5. OmRate free path
 6. OmRate x402-enabled path, ideally with `onchainos payment x402-pay` as the proof surface
-7. Uniswap planner readiness check and downstream onchainos execution command generation
-8. only then attempt a tiny live execution
+7. Uniswap planner readiness check and downstream LP payload handoff into `depositLpPosition`
+8. owner withdraw path: `withdrawToOwner` or `sweepToOwner` -> Telegram approval -> callback resume
+9. only then attempt a tiny live execution
 
 ## 8. Productization gates before demo
 
@@ -174,11 +191,28 @@ Goal:
 
 Suggested setup:
 
-1. invoke `phalanx_action` for `pancakeswap-v3`, keeping any concrete contract address in the payload rather than the user-facing target string
+1. invoke `phalanx_uniswap_liquidity_plan` first and capture `runtimeDownstream.payloadTemplate`
+2. invoke `phalanx_action` with `action=depositLpPosition`, `target=uniswap-v3`, and a filled-in payload template
+3. confirm MCP returns `pending_approval`
+4. approve in Telegram
+5. confirm callback summary says the `uniswap-v3` policy item was widened and the LP add-liquidity action resumed
+6. invoke the same `depositLpPosition` action again and confirm it executes without another approval
+7. keep `pancakeswap-v3` as a secondary capability probe rather than the main blocked demo target
+
+### Segment D: funds return to owner
+
+Goal:
+
+- show that funds can be returned from the active Agentic Wallet to the fixed owner wallet
+- show this path is approval-gated and separate from whitelist governance
+
+Suggested setup:
+
+1. invoke `phalanx_action` with `action=withdrawToOwner` or `action=sweepToOwner`
 2. confirm MCP returns `pending_approval`
 3. approve in Telegram
-4. confirm callback summary says the `pancakeswap-v3` policy item was widened and the original action resumed
-5. invoke the same `pancakeswap-v3` action again and confirm it executes without another approval
+4. confirm callback resumes owner withdrawal directly, without any whitelist expansion
+5. confirm gas reserve remains on-chain after `sweepToOwner`
 
 ## 10. Evidence checklist
 
@@ -186,21 +220,24 @@ Capture these artifacts during the demo rehearsal:
 
 - startup summary showing `mode`, readiness, and guardian surface state
 - test output from the productization regression suite
-- Telegram approval screenshot for a blocked fixed policy item such as `pancakeswap-v3`
+- Telegram approval screenshot for blocked `Uniswap LP add liquidity`
+- Telegram approval screenshot for `withdraw to owner` or `sweep to owner`
 - Telegram execution report screenshot for guardian execution
 - tx hashes or synthetic governance refs for whitelist write and resumed execution
 - event log snippet showing correlated `intentId` / `correlationId`
-- Uniswap planner evidence showing official skill discovery plus downstream runtime target
+- Uniswap planner evidence showing official skill discovery plus downstream runtime target/action/payload template
 - x402 settlement line or proof artifact
-- proof that the same `pancakeswap-v3` action executes without another approval after the policy item is widened
+- proof that the same `uniswap-v3` LP action executes without another approval after the policy item is widened
+- proof that owner withdrawal uses direct approval rather than whitelist governance
 
 ## 11. Validation gates
 
 ### Short-term demo ready
 
 - fixed policy items are the user-facing governance subject
-- `uniswap-v3` executes as an already-allowlisted route
-- `pancakeswap-v3` is blocked before approval and resumes after approval
+- `uniswap-v3` LP is blocked before approval and resumes after approval
+- `pancakeswap-v3` remains on the same LP execution interface and is probed separately for live capability
+- owner withdrawal is fixed-destination, approval-gated, and preserves gas reserve on sweep
 - local whitelist persistence stores the symbolic policy item
 - chain-visible governance, when enabled, may separately use a concrete contract address
 - execution-time `onchainos` security checks remain downstream of approval

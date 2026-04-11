@@ -1,6 +1,8 @@
 import type { ExecutionAdapter } from "../runtime/core.js";
 import type { RuntimeIntent } from "../runtime/types.js";
 import { executeOnchainosDefiExecution, executeOnchainosSwapExecution } from "../adapters/onchainos.js";
+import { executeLpPositionIntent } from "../adapters/lp-execution.js";
+import { executeSweepToOwner, executeWithdrawToOwner } from "../adapters/owner-withdraw.js";
 import { type UniswapPlannerExecutionHooks, runUniswapLiquidityPlannerForPayload } from "../adapters/uniswap.js";
 
 export interface CreateSkillBackedExecutorOptions {
@@ -11,6 +13,15 @@ export interface CreateSkillBackedExecutorOptions {
 function stringField(payload: Readonly<Record<string, unknown>>, key: string): string | undefined {
   const value = payload[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function defaultExecutionWalletAddress(env: NodeJS.ProcessEnv): string | undefined {
+  const runtimeMode = (env.PHALANX_RUNTIME_MODE ?? "").trim().toLowerCase();
+  const livePrimary = (env.PHALANX_WALLET_ADDRESS ?? env.AGENT_WALLET_ADDRESS ?? "").trim();
+  if (runtimeMode === "live") {
+    return livePrimary || undefined;
+  }
+  return livePrimary || (env.TEST_WALLET_ADDRESS ?? "").trim() || undefined;
 }
 
 function governanceSummary(intent: RuntimeIntent): Record<string, unknown> {
@@ -77,7 +88,7 @@ export function createSkillBackedExecutor(
               {
                 kind: "lending_deposit",
                 investmentId: stringField(leg.payload, "investmentId") ?? "",
-                address: stringField(leg.payload, "address") ?? env.TEST_WALLET_ADDRESS ?? "",
+                address: stringField(leg.payload, "address") ?? defaultExecutionWalletAddress(env) ?? "",
                 token: stringField(leg.payload, "token") ?? "",
                 amount: stringField(leg.payload, "amount") ?? "",
                 chain,
@@ -92,7 +103,7 @@ export function createSkillBackedExecutor(
             {
               kind: "lending_withdraw",
               investmentId: stringField(leg.payload, "investmentId") ?? "",
-              address: stringField(leg.payload, "address") ?? env.TEST_WALLET_ADDRESS ?? "",
+              address: stringField(leg.payload, "address") ?? defaultExecutionWalletAddress(env) ?? "",
               chain,
               ratio: stringField(leg.payload, "ratio"),
               amount: stringField(leg.payload, "amount"),
@@ -128,7 +139,7 @@ export function createSkillBackedExecutor(
           {
             kind: "lending_deposit",
             investmentId: stringField(payload, "investmentId") ?? "",
-            address: stringField(payload, "address") ?? env.TEST_WALLET_ADDRESS ?? "",
+            address: stringField(payload, "address") ?? defaultExecutionWalletAddress(env) ?? "",
             token: stringField(payload, "token") ?? "",
             amount: stringField(payload, "amount") ?? "",
             chain: stringField(payload, "chain") ?? "ethereum",
@@ -143,7 +154,7 @@ export function createSkillBackedExecutor(
           {
             kind: "lending_withdraw",
             investmentId: stringField(payload, "investmentId") ?? "",
-            address: stringField(payload, "address") ?? env.TEST_WALLET_ADDRESS ?? "",
+            address: stringField(payload, "address") ?? defaultExecutionWalletAddress(env) ?? "",
             chain: stringField(payload, "chain") ?? "ethereum",
             ratio: stringField(payload, "ratio"),
             amount: stringField(payload, "amount"),
@@ -155,6 +166,18 @@ export function createSkillBackedExecutor(
         );
       }
 
+      if (intent.action === "depositLpPosition" || intent.action === "withdrawLpPosition") {
+        return executeLpPositionIntent(intent.action, intent.payload, env, intent.target);
+      }
+
+      if (intent.action === "withdrawToOwner") {
+        return executeWithdrawToOwner(intent.payload, env);
+      }
+
+      if (intent.action === "sweepToOwner") {
+        return executeSweepToOwner(intent.payload, env);
+      }
+
       if (intent.action === "swap") {
         const payload = intent.payload;
         return executeOnchainosSwapExecution(
@@ -162,7 +185,7 @@ export function createSkillBackedExecutor(
             fromTokenAddress: stringField(payload, "fromTokenAddress") ?? "",
             toTokenAddress: stringField(payload, "toTokenAddress") ?? "",
             chain: stringField(payload, "chain") ?? "base",
-            wallet: stringField(payload, "wallet") ?? env.TEST_WALLET_ADDRESS ?? "",
+            wallet: stringField(payload, "wallet") ?? defaultExecutionWalletAddress(env) ?? "",
             amount: stringField(payload, "amount"),
             readableAmount: stringField(payload, "readableAmount"),
             slippage: stringField(payload, "slippage"),

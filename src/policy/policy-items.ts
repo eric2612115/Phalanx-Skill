@@ -35,14 +35,14 @@ export const DEMO_POLICY_ITEMS: Readonly<Record<DemoPolicyItemId, DemoPolicyItem
     id: "uniswap-v3",
     label: "Uniswap V3",
     category: "lp",
-    executionActions: ["planUniswapLiquidity", "swap", "deposit", "withdraw"],
+    executionActions: ["planUniswapLiquidity", "swap", "depositLpPosition", "withdrawLpPosition"],
     summary: "Fixed demo policy item for allowlisted Uniswap V3 planning and execution.",
   },
   "pancakeswap-v3": {
     id: "pancakeswap-v3",
     label: "PancakeSwap V3",
     category: "lp",
-    executionActions: ["swap", "deposit", "withdraw"],
+    executionActions: ["swap", "depositLpPosition", "withdrawLpPosition"],
     summary: "Fixed demo policy item for non-allowlisted LP governance demo flows.",
   },
   "whitelist-admin": {

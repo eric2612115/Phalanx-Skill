@@ -104,6 +104,9 @@ describe("official Uniswap liquidity planner (skills CLI path + data plane)", ()
     expect(exec.dataPlane?.uniswapPools).toHaveLength(1);
     expect(exec.dataPlane?.uniswapPools[0]?.pairAddress).toBe("0xabc");
     expect(exec.runtimeDownstream?.executionTarget).toBe("uniswap-v3");
+    expect(exec.runtimeDownstream?.executionAction).toBe("depositLpPosition");
+    expect(exec.runtimeDownstream?.payloadTemplate?.protocol).toBe("uniswap-v3");
+    expect(exec.runtimeDownstream?.payloadTemplate?.chain).toBe("base");
     expect(exec.runtimeDownstream?.topUniswapPools?.[0]?.dexId).toBe("uniswap");
     expect(execFile).toHaveBeenCalled();
     expect(fetch).toHaveBeenCalled();

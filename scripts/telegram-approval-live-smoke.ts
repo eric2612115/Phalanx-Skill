@@ -105,10 +105,45 @@ async function main(): Promise<void> {
   void bot.start();
   await new Promise((resolve) => setTimeout(resolve, 1500));
 
+  const plannerResult = await host.invokeMcp("phalanx_uniswap_liquidity_plan", {
+    chain: "base",
+    tokenA: "USDC",
+    tokenB: "ETH",
+    positionType: "v3",
+  });
+  if (!plannerResult.ok) {
+    throw new Error(`Planner failed before Telegram smoke: ${plannerResult.code} ${plannerResult.message}`);
+  }
+
+  const downstream =
+    (
+      plannerResult.data.adapterResult as {
+        runtimeDownstream?: {
+          executionTarget?: string;
+          executionAction?: string;
+          payloadTemplate?: Record<string, unknown>;
+        };
+      }
+    ).runtimeDownstream ?? {};
+  const action = downstream.executionAction ?? "depositLpPosition";
+  const target = downstream.executionTarget ?? "uniswap-v3";
+  const payload = {
+    ...(downstream.payloadTemplate ?? {}),
+    investmentId:
+      process.env.PHALANX_SMOKE_LP_INVESTMENT_ID ??
+      ((downstream.payloadTemplate?.investmentId as string | undefined) || "uniswap-base-weth-usdc-v3"),
+    amount:
+      process.env.PHALANX_SMOKE_LP_AMOUNT ??
+      ((downstream.payloadTemplate?.amount as string | undefined) || "1000000"),
+    amountSecondary:
+      process.env.PHALANX_SMOKE_LP_AMOUNT_SECONDARY ??
+      ((downstream.payloadTemplate?.amountSecondary as string | undefined) || "500000000000000"),
+  };
+
   const actionResult = await host.invokeMcp("phalanx_action", {
-    action: "deposit",
-    payload: { amount: "1" },
-    target: "pool",
+    action,
+    payload,
+    target,
   });
 
   console.log(
@@ -116,9 +151,10 @@ async function main(): Promise<void> {
       {
         mode: "telegram_approval_live_smoke",
         startup: host.getStartupSummary(),
+        plannerResult,
         actionResult,
         outbox: host.getTelegramApprovalOutbox(),
-        instruction: "Click Approve or Reject on Telegram to continue this smoke run.",
+        instruction: "Click Approve or Reject on Telegram to continue the blocked Uniswap LP smoke run.",
       },
       null,
       2,

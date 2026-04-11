@@ -72,6 +72,30 @@ const ACTION_DEFINITIONS = {
     allowedBeforeReady: false,
     stateChanging: true,
   },
+  depositLpPosition: {
+    approvalClass: "AUTO_EXECUTE",
+    conversationAllowed: false,
+    allowedBeforeReady: false,
+    stateChanging: true,
+  },
+  withdrawLpPosition: {
+    approvalClass: "AUTO_EXECUTE",
+    conversationAllowed: false,
+    allowedBeforeReady: false,
+    stateChanging: true,
+  },
+  withdrawToOwner: {
+    approvalClass: "REQUIRE_APPROVAL",
+    conversationAllowed: false,
+    allowedBeforeReady: false,
+    stateChanging: true,
+  },
+  sweepToOwner: {
+    approvalClass: "REQUIRE_APPROVAL",
+    conversationAllowed: false,
+    allowedBeforeReady: false,
+    stateChanging: true,
+  },
   swap: {
     approvalClass: "AUTO_EXECUTE",
     conversationAllowed: false,

@@ -52,6 +52,14 @@ export type OnchainosPortfolioReadInput = {
   readonly env?: NodeJS.ProcessEnv;
 };
 
+export type OnchainosWalletBalanceInput = {
+  readonly chain?: string;
+  readonly tokenAddress?: string;
+  readonly force?: boolean;
+  readonly timeoutMs?: number;
+  readonly env?: NodeJS.ProcessEnv;
+};
+
 export type OnchainosDefiPositionsInput = {
   readonly address: string;
   readonly chains: readonly string[];
@@ -77,6 +85,16 @@ export type OnchainosTxDetailInput = {
 };
 
 export type OnchainosPortfolioReadResult = {
+  readonly provider: "onchainos";
+  readonly status: "completed" | "failed" | "tool_missing";
+  readonly argv: string[];
+  readonly summary: string;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly exitCode?: number | null;
+};
+
+export type OnchainosWalletBalanceResult = {
   readonly provider: "onchainos";
   readonly status: "completed" | "failed" | "tool_missing";
   readonly argv: string[];
@@ -135,6 +153,34 @@ export type OnchainosExecutionCommandInput =
       readonly slippage?: string;
       readonly tokenId?: string;
       readonly platformId?: string;
+    }
+  | {
+      readonly kind: "lp_deposit";
+      readonly protocol: "uniswap-v3" | "pancakeswap-v3";
+      readonly investmentId: string;
+      readonly address: string;
+      readonly token: string;
+      readonly amount: string;
+      readonly chain: string;
+      readonly amountSecondary?: string;
+      readonly feeTier?: string;
+      readonly tickLower?: string;
+      readonly tickUpper?: string;
+      readonly poolAddress?: string;
+      readonly slippage?: string;
+    }
+  | {
+      readonly kind: "lp_withdraw";
+      readonly protocol: "uniswap-v3" | "pancakeswap-v3";
+      readonly investmentId: string;
+      readonly address: string;
+      readonly chain: string;
+      readonly tokenId?: string;
+      readonly ratio?: string;
+      readonly amount?: string;
+      readonly slippage?: string;
+      readonly poolAddress?: string;
+      readonly collectFees?: boolean;
     };
 
 export type OnchainosSwapExecutionCommandInput = {
@@ -158,6 +204,16 @@ export type OnchainosX402PaymentCommandInput = {
   readonly maxTimeoutSeconds?: number;
 };
 
+export type OnchainosWalletSendCommandInput = {
+  readonly recipient: string;
+  readonly chain: string;
+  readonly from?: string;
+  readonly contractToken?: string;
+  readonly amt?: string;
+  readonly readableAmount?: string;
+  readonly force?: boolean;
+};
+
 export type OnchainosExecutionCommand = {
   readonly argv: string[];
 };
@@ -174,6 +230,17 @@ export type OnchainosTxProgress = import("../execution/coordinator.js").TxProgre
 export type OnchainosX402PaymentResult = {
   readonly provider: "onchainos";
   readonly lane: "x402_payment";
+  readonly status: "completed" | "failed" | "tool_missing";
+  readonly argv: string[];
+  readonly summary: string;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly exitCode?: number | null;
+};
+
+export type OnchainosWalletSendResult = {
+  readonly provider: "onchainos";
+  readonly lane: "wallet_send";
   readonly status: "completed" | "failed" | "tool_missing";
   readonly argv: string[];
   readonly summary: string;
@@ -349,6 +416,78 @@ export function buildOnchainosExecutionCommand(
       }
       return { argv };
     }
+    case "lp_deposit": {
+      const argv = [
+        "onchainos",
+        "defi",
+        "invest",
+        "--investment-id",
+        input.investmentId,
+        "--address",
+        input.address,
+        "--token",
+        input.token,
+        "--amount",
+        input.amount,
+        "--chain",
+        input.chain,
+        "--platform-id",
+        input.protocol,
+      ];
+      if (input.amountSecondary) {
+        argv.push("--amount-secondary", input.amountSecondary);
+      }
+      if (input.feeTier) {
+        argv.push("--fee-tier", input.feeTier);
+      }
+      if (input.tickLower) {
+        argv.push("--tick-lower", input.tickLower);
+      }
+      if (input.tickUpper) {
+        argv.push("--tick-upper", input.tickUpper);
+      }
+      if (input.poolAddress) {
+        argv.push("--pool-address", input.poolAddress);
+      }
+      if (input.slippage) {
+        argv.push("--slippage", input.slippage);
+      }
+      return { argv };
+    }
+    case "lp_withdraw": {
+      const argv = [
+        "onchainos",
+        "defi",
+        "withdraw",
+        "--investment-id",
+        input.investmentId,
+        "--address",
+        input.address,
+        "--chain",
+        input.chain,
+        "--platform-id",
+        input.protocol,
+      ];
+      if (input.tokenId) {
+        argv.push("--token-id", input.tokenId);
+      }
+      if (input.ratio) {
+        argv.push("--ratio", input.ratio);
+      }
+      if (input.amount) {
+        argv.push("--amount", input.amount);
+      }
+      if (input.slippage) {
+        argv.push("--slippage", input.slippage);
+      }
+      if (input.poolAddress) {
+        argv.push("--pool-address", input.poolAddress);
+      }
+      if (input.collectFees) {
+        argv.push("--collect-fees");
+      }
+      return { argv };
+    }
   }
 }
 
@@ -450,6 +589,36 @@ export function buildOnchainosX402PaymentCommand(
   return { argv };
 }
 
+export function buildOnchainosWalletSendCommand(
+  input: OnchainosWalletSendCommandInput,
+): OnchainosExecutionCommand {
+  const normalizedChain = normalizeOnchainosWalletChain(input.chain);
+  const argv = [
+    "onchainos",
+    "wallet",
+    "send",
+    "--receipt",
+    input.recipient,
+    "--chain",
+    normalizedChain,
+  ];
+  if (input.from) {
+    argv.push("--from", input.from);
+  }
+  if (input.contractToken) {
+    argv.push("--contract-token", input.contractToken);
+  }
+  if (input.readableAmount) {
+    argv.push("--readable-amount", input.readableAmount);
+  } else if (input.amt) {
+    argv.push("--amt", input.amt);
+  }
+  if (input.force) {
+    argv.push("--force");
+  }
+  return { argv };
+}
+
 export function parseOnchainosDefiExecutionPlan(stdout: string): OnchainosDefiExecutionStep[] {
   try {
     const parsed = JSON.parse(stdout) as unknown;
@@ -541,6 +710,22 @@ export function buildOnchainosContractCallCommand(input: {
     "--from",
     input.from,
   ];
+  if (input.force) {
+    argv.push("--force");
+  }
+  return { argv };
+}
+
+export function buildOnchainosWalletBalanceCommand(
+  input: OnchainosWalletBalanceInput,
+): OnchainosExecutionCommand {
+  const argv = ["onchainos", "wallet", "balance"];
+  if (input.chain) {
+    argv.push("--chain", normalizeOnchainosWalletChain(input.chain));
+  }
+  if (input.tokenAddress) {
+    argv.push("--token-address", input.tokenAddress);
+  }
   if (input.force) {
     argv.push("--force");
   }
@@ -756,6 +941,51 @@ export async function readOnchainosPortfolio(
   };
 }
 
+export async function readOnchainosWalletBalance(
+  input: OnchainosWalletBalanceInput,
+): Promise<OnchainosWalletBalanceResult> {
+  const argv = buildOnchainosWalletBalanceCommand(input).argv;
+  const [command, ...args] = argv;
+  const result = await runCmd(command, args, input.timeoutMs ?? 120_000, {
+    ...process.env,
+    ...(input.env ?? process.env),
+    ...buildOnchainosRuntimeEnv(input.env ?? process.env),
+  });
+
+  if (result.spawnError?.code === "ENOENT") {
+    return {
+      provider: "onchainos",
+      status: "tool_missing",
+      argv,
+      summary: "onchainos binary not found on PATH",
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  if (!result.ok) {
+    return {
+      provider: "onchainos",
+      status: "failed",
+      argv,
+      summary: trimSummary(result.stderr || result.stdout || "onchainos wallet balance command failed"),
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  return {
+    provider: "onchainos",
+    status: "completed",
+    argv,
+    summary: "onchainos wallet balance command completed",
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+  };
+}
+
 export async function readOnchainosDefiPositions(
   input: OnchainosDefiPositionsInput,
 ): Promise<OnchainosDefiPositionsResult> {
@@ -938,6 +1168,54 @@ export async function executeOnchainosX402Payment(
     status: "completed",
     argv: command.argv,
     summary: "onchainos x402 payment command completed",
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+  };
+}
+
+export async function executeOnchainosWalletSend(
+  input: OnchainosWalletSendCommandInput,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<OnchainosWalletSendResult> {
+  const command = buildOnchainosWalletSendCommand(input);
+  const [bin, ...args] = command.argv;
+  const result = await runCmd(bin, args, 120_000, {
+    ...env,
+    ...buildOnchainosRuntimeEnv(env),
+  });
+
+  if (result.spawnError?.code === "ENOENT") {
+    return {
+      provider: "onchainos",
+      lane: "wallet_send",
+      status: "tool_missing",
+      argv: command.argv,
+      summary: "onchainos binary not found on PATH",
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  if (!result.ok) {
+    return {
+      provider: "onchainos",
+      lane: "wallet_send",
+      status: "failed",
+      argv: command.argv,
+      summary: trimSummary(result.stderr || result.stdout || "onchainos wallet send failed"),
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  return {
+    provider: "onchainos",
+    lane: "wallet_send",
+    status: "completed",
+    argv: command.argv,
+    summary: "onchainos wallet send command completed",
     stdout: result.stdout,
     stderr: result.stderr,
     exitCode: result.exitCode,

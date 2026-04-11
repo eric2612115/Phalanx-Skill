@@ -290,11 +290,18 @@ describe("runtime host integration", () => {
     const ar = out.data.adapterResult as {
       officialInvocation?: { skillsCliListJson?: { matchedLiquidityPlanner?: boolean } };
       dataPlane?: { uniswapPools?: { pairAddress?: string }[] };
-      runtimeDownstream?: { executionTarget?: string };
+      runtimeDownstream?: {
+        executionTarget?: string;
+        executionAction?: string;
+        payloadTemplate?: { protocol?: string; chain?: string };
+      };
     };
     expect(ar.officialInvocation?.skillsCliListJson?.matchedLiquidityPlanner).toBe(true);
     expect(ar.dataPlane?.uniswapPools?.[0]?.pairAddress).toBe("0xbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef");
     expect(ar.runtimeDownstream?.executionTarget).toBe("uniswap-v3");
+    expect(ar.runtimeDownstream?.executionAction).toBe("depositLpPosition");
+    expect(ar.runtimeDownstream?.payloadTemplate?.protocol).toBe("uniswap-v3");
+    expect(ar.runtimeDownstream?.payloadTemplate?.chain).toBe("base");
   });
 
   it("uses a bound telegram notifier for whitelist-change approval delivery", async () => {
@@ -496,5 +503,118 @@ describe("runtime host integration", () => {
     }
     expect(second.data.kind).toBe("executed");
     expect(host.getTelegramApprovalOutbox()).toHaveLength(0);
+  });
+
+  it("routes a blocked Uniswap LP deposit through approval then resumes the LP execution lane", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      whitelistTargets: ["whitelist-admin"],
+      governanceWriteImpl: async () => ({
+        status: "completed",
+        summary: "whitelist_contract_write_confirmed",
+        txHash: "0xpolicy",
+      }),
+      executor: {
+        execute: async (intent) => ({
+          provider: "test",
+          action: intent.action,
+          target: intent.target,
+          txRefs: ["0xlpdeposit"],
+          summary: `${intent.action} executed`,
+        }),
+      },
+    });
+
+    const first = await host.invokeMcp("phalanx_action", {
+      action: "depositLpPosition",
+      target: "uniswap-v3",
+      payload: {
+        protocol: "uniswap-v3",
+        investmentId: "uniswap-base-weth-usdc-v3",
+        chain: "base",
+        token: "USDC",
+        amount: "1000000",
+      },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok || first.data.kind !== "pending_approval") {
+      throw new Error("expected pending approval");
+    }
+
+    const queued = host.getTelegramApprovalOutbox();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.summary).toContain("Requested action: add liquidity (LP deposit)");
+    expect(queued[0]?.summary).toContain("Blocked target: uniswap-v3");
+
+    const resumed = await host.handleTelegramCallback(queued[0]!.approveCallbackData);
+    expect(resumed.handled).toBe(true);
+    expect(resumed.runtimeOutcome?.type).toBe("executed");
+    if (resumed.runtimeOutcome?.type !== "executed") {
+      throw new Error("expected execution");
+    }
+    expect(resumed.runtimeOutcome.adapterResult).toMatchObject({
+      mode: "whitelist_governance_completed",
+      target: "uniswap-v3",
+      resumedAction: "depositLpPosition",
+      txRefs: ["0xpolicy", "0xlpdeposit"],
+    });
+  });
+
+  it("routes withdrawToOwner through direct approval without whitelist governance", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const governanceWrites: string[] = [];
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      whitelistTargets: ["whitelist-admin"],
+      governanceWriteImpl: async (target) => {
+        governanceWrites.push(target);
+        return {
+          status: "completed",
+          summary: "whitelist_contract_write_confirmed",
+          txHash: "0xpolicy",
+        };
+      },
+      executor: {
+        execute: async (intent) => ({
+          provider: "test",
+          action: intent.action,
+          txRefs: ["0xownerwithdraw"],
+          summary: `${intent.action} executed`,
+        }),
+      },
+    });
+
+    const first = await host.invokeMcp("phalanx_action", {
+      action: "withdrawToOwner",
+      payload: {
+        chain: "base",
+        token: "USDC",
+        amount: "1",
+      },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok || first.data.kind !== "pending_approval") {
+      throw new Error("expected pending approval");
+    }
+
+    const queued = host.getTelegramApprovalOutbox();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.summary).toContain("Requested action: withdraw to owner");
+
+    const resumed = await host.handleTelegramCallback(queued[0]!.approveCallbackData);
+    expect(resumed.handled).toBe(true);
+    expect(resumed.runtimeOutcome?.type).toBe("executed");
+    if (resumed.runtimeOutcome?.type !== "executed") {
+      throw new Error("expected execution");
+    }
+    expect(governanceWrites).toEqual([]);
+    expect(resumed.runtimeOutcome.adapterResult).toMatchObject({
+      provider: "test",
+      action: "withdrawToOwner",
+      txRefs: ["0xownerwithdraw"],
+    });
   });
 });

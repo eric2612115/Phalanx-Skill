@@ -88,9 +88,21 @@ export type UniswapLiquidityPlannerExecutionResult = {
   /** Structured handoff for runtime / execution lane (beyond logging). */
   readonly runtimeDownstream?: {
     readonly executionTarget: "uniswap-v3";
+    readonly executionAction: "depositLpPosition";
     readonly positionCreateBaseUrl: string;
     readonly topUniswapPools: readonly UniswapPlannerDexPoolSummary[];
     readonly plannerInput: UniswapLiquidityPlannerInvocationInput;
+    readonly payloadTemplate: {
+      readonly protocol: "uniswap-v3";
+      readonly chain: string;
+      readonly investmentId: string;
+      readonly token: string;
+      readonly amount: string;
+      readonly amountSecondary: string;
+      readonly positionType: "v2" | "v3" | "v4";
+      readonly poolAddress?: string;
+    };
+    readonly missingExecutionFields: readonly ("investmentId" | "amount" | "amountSecondary")[];
   };
 };
 
@@ -480,9 +492,21 @@ export async function executeUniswapLiquidityPlannerInvocation(
     },
     runtimeDownstream: {
       executionTarget: "uniswap-v3",
+      executionAction: "depositLpPosition",
       positionCreateBaseUrl: deepLinkBase,
       topUniswapPools: dex.pools.slice(0, 8),
       plannerInput: plan.input,
+      payloadTemplate: {
+        protocol: "uniswap-v3",
+        chain,
+        investmentId: "",
+        token: tokenA,
+        amount: "",
+        amountSecondary: "",
+        positionType,
+        poolAddress: dex.pools[0]?.pairAddress,
+      },
+      missingExecutionFields: ["investmentId", "amount", "amountSecondary"],
     },
   };
 }

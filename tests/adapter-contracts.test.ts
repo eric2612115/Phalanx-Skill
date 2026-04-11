@@ -9,19 +9,27 @@ import {
   buildOnchainosDefiPositionsCommand,
   buildOnchainosExecutionCommand,
   buildOnchainosSwapExecutionCommand,
+  buildOnchainosWalletBalanceCommand,
+  buildOnchainosWalletSendCommand,
   buildOnchainosTxDetailCommand,
   buildOnchainosX402PaymentCommand,
   buildOnchainosRuntimeEnv,
   executeOnchainosDefiExecution,
+  executeOnchainosWalletSend,
   executeOnchainosX402Payment,
   listOnchainosCapabilities,
   parseOnchainosDefiExecutionPlan,
   parseOnchainosTxDetailStatus,
   portfolioPathContract,
+  readOnchainosWalletBalance,
   readOnchainosDefiPositionDetail,
   readOnchainosDefiPositions,
   readOnchainosPortfolio,
 } from "../src/adapters/onchainos.ts";
+import {
+  planSweepToOwnerTransfers,
+  resolveOwnerWithdrawConfig,
+} from "../src/adapters/owner-withdraw.ts";
 import {
   executeOmRateQuery,
   planOmRateQuery,
@@ -664,6 +672,51 @@ describe("onchainos adapter (contract)", () => {
     expect(cmd.argv).toContain("--ratio");
   });
 
+  it("buildOnchainosExecutionCommand shapes an LP deposit argv", () => {
+    const cmd = buildOnchainosExecutionCommand({
+      kind: "lp_deposit",
+      protocol: "uniswap-v3",
+      investmentId: "uniswap-base-weth-usdc-v3",
+      address: "0x1111111111111111111111111111111111111111",
+      chain: "base",
+      token: "USDC",
+      amount: "1000000",
+      amountSecondary: "500000000000000",
+      feeTier: "3000",
+      tickLower: "-887220",
+      tickUpper: "887220",
+      poolAddress: "0x2222222222222222222222222222222222222222",
+    });
+
+    expect(cmd.argv.join(" ")).toContain("onchainos defi invest");
+    expect(cmd.argv).toContain("--investment-id");
+    expect(cmd.argv).toContain("uniswap-base-weth-usdc-v3");
+    expect(cmd.argv).toContain("--platform-id");
+    expect(cmd.argv).toContain("uniswap-v3");
+    expect(cmd.argv).toContain("--pool-address");
+  });
+
+  it("buildOnchainosExecutionCommand shapes an LP withdraw argv", () => {
+    const cmd = buildOnchainosExecutionCommand({
+      kind: "lp_withdraw",
+      protocol: "pancakeswap-v3",
+      investmentId: "pancake-bsc-bnb-usdt-v3",
+      address: "0x1111111111111111111111111111111111111111",
+      chain: "bsc",
+      tokenId: "12345",
+      ratio: "1",
+      collectFees: true,
+      poolAddress: "0x3333333333333333333333333333333333333333",
+    });
+
+    expect(cmd.argv.join(" ")).toContain("onchainos defi withdraw");
+    expect(cmd.argv).toContain("--platform-id");
+    expect(cmd.argv).toContain("pancakeswap-v3");
+    expect(cmd.argv).toContain("--token-id");
+    expect(cmd.argv).toContain("12345");
+    expect(cmd.argv).toContain("--collect-fees");
+  });
+
   it("parseOnchainosDefiExecutionPlan extracts contract-call steps from stdout", () => {
     const parsed = parseOnchainosDefiExecutionPlan(
       JSON.stringify({
@@ -771,6 +824,40 @@ describe("onchainos adapter (contract)", () => {
     expect(cmd.argv).toContain("--asset");
   });
 
+  it("buildOnchainosWalletSendCommand shapes an ERC20 owner withdrawal argv", () => {
+    const cmd = buildOnchainosWalletSendCommand({
+      recipient: "0x4444444444444444444444444444444444444444",
+      chain: "base",
+      from: "0x1111111111111111111111111111111111111111",
+      readableAmount: "1.5",
+      contractToken: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      force: true,
+    });
+
+    expect(cmd.argv.join(" ")).toContain("onchainos wallet send");
+    expect(cmd.argv).toContain("--receipt");
+    expect(cmd.argv).toContain("0x4444444444444444444444444444444444444444");
+    expect(cmd.argv).toContain("--chain");
+    expect(cmd.argv).toContain("8453");
+    expect(cmd.argv).toContain("--contract-token");
+    expect(cmd.argv).toContain("--readable-amount");
+    expect(cmd.argv).toContain("--force");
+  });
+
+  it("buildOnchainosWalletBalanceCommand shapes a wallet balance argv", () => {
+    const cmd = buildOnchainosWalletBalanceCommand({
+      chain: "base",
+      tokenAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      force: true,
+    });
+
+    expect(cmd.argv.join(" ")).toContain("onchainos wallet balance");
+    expect(cmd.argv).toContain("--chain");
+    expect(cmd.argv).toContain("8453");
+    expect(cmd.argv).toContain("--token-address");
+    expect(cmd.argv).toContain("--force");
+  });
+
   it("executeOnchainosX402Payment degrades cleanly when binary is missing", async () => {
     const result = await executeOnchainosX402Payment(
       {
@@ -786,6 +873,24 @@ describe("onchainos adapter (contract)", () => {
 
     expect(result.provider).toBe("onchainos");
     expect(result.lane).toBe("x402_payment");
+    expect(result.status).toBe("tool_missing");
+  });
+
+  it("executeOnchainosWalletSend degrades cleanly when binary is missing", async () => {
+    const result = await executeOnchainosWalletSend(
+      {
+        recipient: "0x4444444444444444444444444444444444444444",
+        chain: "base",
+        readableAmount: "1.5",
+        contractToken: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      },
+      {
+        PATH: "/definitely/missing",
+      } as NodeJS.ProcessEnv,
+    );
+
+    expect(result.provider).toBe("onchainos");
+    expect(result.lane).toBe("wallet_send");
     expect(result.status).toBe("tool_missing");
   });
 
@@ -1057,6 +1162,17 @@ describe("onchainos adapter (contract)", () => {
     expect(result.argv.join(" ")).toContain("portfolio all-balances");
   });
 
+  it("readOnchainosWalletBalance degrades cleanly when the binary is missing", async () => {
+    const result = await readOnchainosWalletBalance({
+      chain: "base",
+      env: { PATH: "/definitely/missing" } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.provider).toBe("onchainos");
+    expect(result.status).toBe("tool_missing");
+    expect(result.argv.join(" ")).toContain("wallet balance");
+  });
+
   it("readOnchainosTxDetail degrades cleanly when the binary is missing", async () => {
     const { readOnchainosTxDetail } = await import("../src/adapters/onchainos.ts");
     const result = await readOnchainosTxDetail({
@@ -1117,5 +1233,58 @@ describe("onchainos adapter (contract)", () => {
     expect(result.status).toBe("tool_missing");
     expect(result.argv.join(" ")).toContain("defi position-detail");
     expect(result.argv).toContain("--platform-id");
+  });
+
+  it("resolveOwnerWithdrawConfig requires a fixed owner address", () => {
+    expect(resolveOwnerWithdrawConfig({})).toMatchObject({
+      ready: false,
+      reason: "missing_owner_address",
+    });
+  });
+
+  it("planSweepToOwnerTransfers keeps gas reserve on native token while sweeping ERC20 balances", () => {
+    const plan = planSweepToOwnerTransfers(
+      {
+        chain: "base",
+        ownerAddress: "0x4444444444444444444444444444444444444444",
+        gasReserveWei: "100000000000000",
+      },
+      [
+        {
+          chainId: "8453",
+          symbol: "BASE_ETH",
+          tokenAddress: "",
+          rawBalance: "277757919042307",
+          decimal: "18",
+        },
+        {
+          chainId: "8453",
+          symbol: "USDC",
+          tokenAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          rawBalance: "200000",
+          decimal: "6",
+        },
+      ],
+    );
+
+    expect(plan.status).toBe("planned");
+    if (plan.status !== "planned") {
+      throw new Error("expected planned sweep");
+    }
+    expect(plan.transfers).toEqual([
+      {
+        chain: "base",
+        recipient: "0x4444444444444444444444444444444444444444",
+        amt: "177757919042307",
+        assetKind: "native",
+      },
+      {
+        chain: "base",
+        recipient: "0x4444444444444444444444444444444444444444",
+        amt: "200000",
+        contractToken: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        assetKind: "erc20",
+      },
+    ]);
   });
 });

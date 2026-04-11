@@ -6,6 +6,7 @@ import {
   discoverUniswapPlannerSkill,
   executeUniswapLiquidityPlannerInvocation,
   planUniswapLiquidityPlannerInvocation,
+  runUniswapLiquidityPlannerForPayload,
 } from "../src/adapters/uniswap.js";
 import { loadRuntimeConfigValues } from "../src/config/store.js";
 import { mergePolicyItemTargets } from "../src/policy/policy-items.js";
@@ -16,6 +17,7 @@ type SmokeOutput = {
   startup: ReturnType<ReturnType<typeof createPhalanxHost>["getStartupSummary"]>;
   skillReadiness?: {
     onchainos: unknown;
+    pancakeswapOnchainos: unknown;
     uniswapPlanner: unknown;
     uniswapPlannerInvocation: unknown;
     /** Official skills CLI + DexScreener data plane via adapter (when plan is `planned`). */
@@ -25,11 +27,13 @@ type SmokeOutput = {
   uniswapLiquidityPlanMcp?: unknown;
   statusTool: unknown;
   portfolioTool?: unknown;
-  actionTool?: unknown;
-  governanceActionTool?: unknown;
+  blockedLpActionTool?: unknown;
   approvalCallback?: string;
   resumed?: unknown;
-  postGovernanceActionTool?: unknown;
+  postApprovalLpActionTool?: unknown;
+  ownerWithdrawTool?: unknown;
+  ownerWithdrawCallback?: string;
+  ownerWithdrawResumed?: unknown;
 };
 
 function useSyntheticReady(env: NodeJS.ProcessEnv): boolean {
@@ -37,7 +41,57 @@ function useSyntheticReady(env: NodeJS.ProcessEnv): boolean {
 }
 
 function mergeWhitelistTargets(raw: string | undefined): string {
-  return mergePolicyItemTargets(raw, ["pool", "whitelist-admin", "uniswap-v3"]);
+  const filtered =
+    raw
+      ?.split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0 && value !== "uniswap-v3")
+      .join(",") ?? "";
+  return mergePolicyItemTargets(filtered, ["pool", "whitelist-admin"]);
+}
+
+function extractPlannerPayloadTemplate(
+  result: unknown,
+): { target: string; action: string; payloadTemplate: Record<string, unknown> } | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const root = result as { ok?: boolean; data?: { adapterResult?: { runtimeDownstream?: Record<string, unknown> } } };
+  if (!root.ok) {
+    return undefined;
+  }
+  const runtimeDownstream = root.data?.adapterResult?.runtimeDownstream;
+  if (!runtimeDownstream || typeof runtimeDownstream !== "object") {
+    return undefined;
+  }
+  const target = typeof runtimeDownstream.executionTarget === "string" ? runtimeDownstream.executionTarget : undefined;
+  const action = typeof runtimeDownstream.executionAction === "string" ? runtimeDownstream.executionAction : undefined;
+  const payloadTemplate =
+    runtimeDownstream.payloadTemplate && typeof runtimeDownstream.payloadTemplate === "object"
+      ? (runtimeDownstream.payloadTemplate as Record<string, unknown>)
+      : undefined;
+  if (!target || !action || !payloadTemplate) {
+    return undefined;
+  }
+  return { target, action, payloadTemplate };
+}
+
+function buildSyntheticLpExecutionPayload(payloadTemplate: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...payloadTemplate,
+    investmentId:
+      typeof payloadTemplate.investmentId === "string" && payloadTemplate.investmentId.length > 0
+        ? payloadTemplate.investmentId
+        : "uniswap-base-weth-usdc-v3",
+    amount:
+      typeof payloadTemplate.amount === "string" && payloadTemplate.amount.length > 0
+        ? payloadTemplate.amount
+        : "1000000",
+    amountSecondary:
+      typeof payloadTemplate.amountSecondary === "string" && payloadTemplate.amountSecondary.length > 0
+        ? payloadTemplate.amountSecondary
+        : "500000000000000",
+  };
 }
 
 async function main(): Promise<void> {
@@ -65,6 +119,7 @@ async function main(): Promise<void> {
   );
   output.skillReadiness = {
     onchainos: await listOnchainosCapabilities("base"),
+    pancakeswapOnchainos: await listOnchainosCapabilities("bsc"),
     uniswapPlanner: discoverUniswapPlannerSkill(runtimeEnv),
     uniswapPlannerInvocation,
     uniswapPlannerExecution: await executeUniswapLiquidityPlannerInvocation(
@@ -86,13 +141,18 @@ async function main(): Promise<void> {
         WHITELIST_TARGETS: mergeWhitelistTargets(runtimeEnv.WHITELIST_TARGETS),
       },
       executor: {
-        execute: async (intent) => ({
-          mode: "synthetic_demo_execution",
-          action: intent.action,
-          target: intent.target ?? null,
-          payload: intent.payload,
-          txRefs: [`0x${intent.action}`],
-        }),
+        execute: async (intent) => {
+          if (intent.action === "planUniswapLiquidity") {
+            return runUniswapLiquidityPlannerForPayload(intent.payload, runtimeEnv);
+          }
+          return {
+            mode: "synthetic_demo_execution",
+            action: intent.action,
+            target: intent.target ?? null,
+            payload: intent.payload,
+            txRefs: [`0x${intent.action}`],
+          };
+        },
       },
       governanceWriteImpl: async () => ({
         status: "completed",
@@ -111,38 +171,39 @@ async function main(): Promise<void> {
       tokenB: "ETH",
       positionType: "v3",
     });
-    output.actionTool = await syntheticHost.invokeMcp("phalanx_action", {
-      action: "swap",
-      payload: {
-        fromTokenAddress: "0x1111111111111111111111111111111111111111",
-        toTokenAddress: "0x2222222222222222222222222222222222222222",
-        readableAmount: "1.5",
-        chain: "base",
-      },
-      target: "uniswap-v3",
-    });
-    const governancePayload = {
-      fromTokenAddress: "0x1111111111111111111111111111111111111111",
-      toTokenAddress: "0x2222222222222222222222222222222222222222",
-      readableAmount: "1.5",
-      chain: "bsc",
-      contractAddress: "0x3333333333333333333333333333333333333333",
-    };
-    output.governanceActionTool = await syntheticHost.invokeMcp("phalanx_action", {
-      action: "swap",
-      payload: governancePayload,
-      target: "pancakeswap-v3",
-    });
-
-    const callback = syntheticHost.getTelegramApprovalOutbox()[0]?.approveCallbackData;
-    output.approvalCallback = callback;
-    if (callback) {
-      output.resumed = await syntheticHost.handleTelegramCallback(callback);
-      output.postGovernanceActionTool = await syntheticHost.invokeMcp("phalanx_action", {
-        action: "swap",
-        payload: governancePayload,
-        target: "pancakeswap-v3",
+    const plannerHandoff = extractPlannerPayloadTemplate(output.uniswapLiquidityPlanMcp);
+    if (plannerHandoff) {
+      const lpPayload = buildSyntheticLpExecutionPayload(plannerHandoff.payloadTemplate);
+      output.blockedLpActionTool = await syntheticHost.invokeMcp("phalanx_action", {
+        action: plannerHandoff.action,
+        payload: lpPayload,
+        target: plannerHandoff.target,
       });
+
+      const callback = syntheticHost.getTelegramApprovalOutbox()[0]?.approveCallbackData;
+      output.approvalCallback = callback;
+      if (callback) {
+        output.resumed = await syntheticHost.handleTelegramCallback(callback);
+        output.postApprovalLpActionTool = await syntheticHost.invokeMcp("phalanx_action", {
+          action: plannerHandoff.action,
+          payload: lpPayload,
+          target: plannerHandoff.target,
+        });
+      }
+    }
+
+    output.ownerWithdrawTool = await syntheticHost.invokeMcp("phalanx_action", {
+      action: "withdrawToOwner",
+      payload: {
+        chain: "base",
+        contractToken: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        readableAmount: "0.1",
+      },
+    });
+    const ownerWithdrawCallback = syntheticHost.getTelegramApprovalOutbox()[0]?.approveCallbackData;
+    output.ownerWithdrawCallback = ownerWithdrawCallback;
+    if (ownerWithdrawCallback) {
+      output.ownerWithdrawResumed = await syntheticHost.handleTelegramCallback(ownerWithdrawCallback);
     }
   } else if (output.startup.lifecycle === "READY") {
     output.portfolioTool = await host.invokeMcp("phalanx_portfolio", {});

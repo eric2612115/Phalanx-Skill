@@ -97,12 +97,14 @@ export type UniswapLiquidityPlannerExecutionResult = {
       readonly chain: string;
       readonly investmentId: string;
       readonly token: string;
+      readonly tokenSecondary: string;
       readonly amount: string;
       readonly amountSecondary: string;
+      readonly range: string;
       readonly positionType: "v2" | "v3" | "v4";
       readonly poolAddress?: string;
     };
-    readonly missingExecutionFields: readonly ("investmentId" | "amount" | "amountSecondary")[];
+    readonly missingExecutionFields: readonly ("investmentId" | "amount" | "amountSecondary" | "range")[];
   };
 };
 
@@ -501,12 +503,14 @@ export async function executeUniswapLiquidityPlannerInvocation(
         chain,
         investmentId: "",
         token: tokenA,
+        tokenSecondary: tokenB,
         amount: "",
         amountSecondary: "",
+        range: "",
         positionType,
         poolAddress: dex.pools[0]?.pairAddress,
       },
-      missingExecutionFields: ["investmentId", "amount", "amountSecondary"],
+      missingExecutionFields: ["investmentId", "amount", "amountSecondary", "range"],
     },
   };
 }

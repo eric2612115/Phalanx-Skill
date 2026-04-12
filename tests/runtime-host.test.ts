@@ -293,7 +293,7 @@ describe("runtime host integration", () => {
       runtimeDownstream?: {
         executionTarget?: string;
         executionAction?: string;
-        payloadTemplate?: { protocol?: string; chain?: string };
+        payloadTemplate?: { protocol?: string; chain?: string; tokenSecondary?: string; range?: string };
       };
     };
     expect(ar.officialInvocation?.skillsCliListJson?.matchedLiquidityPlanner).toBe(true);
@@ -302,6 +302,8 @@ describe("runtime host integration", () => {
     expect(ar.runtimeDownstream?.executionAction).toBe("depositLpPosition");
     expect(ar.runtimeDownstream?.payloadTemplate?.protocol).toBe("uniswap-v3");
     expect(ar.runtimeDownstream?.payloadTemplate?.chain).toBe("base");
+    expect(ar.runtimeDownstream?.payloadTemplate?.tokenSecondary).toBe("ETH");
+    expect(ar.runtimeDownstream?.payloadTemplate?.range).toBe("");
   });
 
   it("uses a bound telegram notifier for whitelist-change approval delivery", async () => {

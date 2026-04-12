@@ -86,6 +86,7 @@ npm run dev
 npm run build
 npm run review:docker:all
 npm run smoke:live
+npm run smoke:uniswap-lp-roundtrip
 ```
 
 `npm run dev` starts the local dry-run host and prints a startup summary that exposes current lifecycle plus the local MCP / Telegram surface state. It keeps the process alive by default for local verification.
@@ -146,5 +147,41 @@ This verifies:
 - blocked Uniswap LP approval path -> Telegram callback -> RuntimeCore resume
 - owner-withdraw approval path -> Telegram callback -> RuntimeCore resume
 - skill readiness snapshots for `onchainos` and `Uniswap liquidity-planner`
+
+## Uniswap LP live roundtrip
+
+Use the dedicated roundtrip script when you want real-chain proof instead of synthetic orchestration only:
+
+```bash
+npm run smoke:uniswap-lp-roundtrip
+```
+
+Required operator-supplied env for the live LP roundtrip:
+
+- `PHALANX_LP_INVESTMENT_ID`
+- `PHALANX_LP_AMOUNT`
+- `PHALANX_LP_AMOUNT_SECONDARY`
+- `PHALANX_LP_TICK_LOWER`
+- `PHALANX_LP_TICK_UPPER`
+
+`PHALANX_LP_AMOUNT` and `PHALANX_LP_AMOUNT_SECONDARY` are expected in minimal units.
+
+Optional env:
+
+- `PHALANX_LP_CHAIN` (default `base`)
+- `PHALANX_LP_TOKEN_A`, `PHALANX_LP_TOKEN_B`
+- `PHALANX_LP_TOKEN`
+- `PHALANX_LP_TOKEN_SECONDARY`
+- `PHALANX_LP_AMOUNT_SECONDARY`
+- `PHALANX_LP_DISCOVERY_PAGES`
+- `PHALANX_LP_WITHDRAW_PLATFORM_ID`
+- `PHALANX_LP_WITHDRAW_TOKEN_ID`
+- `PHALANX_LP_WITHDRAW_RATIO`
+- `PHALANX_LP_WITHDRAW_AMOUNT`
+- `PHALANX_LP_RANGE` as planner-only context
+
+The roundtrip script intentionally does not persist local LP metadata. It refreshes discovery and position identifiers from `onchainos` before the withdraw leg so demo evidence stays tied to current chain state.
+
+For why the live Uniswap V3 lane is wired through direct `NonfungiblePositionManager` calldata rather than the default high-level LP route, see `docs/uniswap-v3-direct-execution.md`.
 
 Short-term demo governance is intentionally modeled around fixed policy items such as `aave-v3`, `morpho-vaults`, `uniswap-v3`, `pancakeswap-v3`, and `whitelist-admin`. This is the compatibility layer that will later evolve into agent-managed policy bundles without rewriting the current approval plumbing.

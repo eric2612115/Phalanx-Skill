@@ -121,6 +121,59 @@ Run these incrementally with test wallets and small amounts already deposited in
 8. owner withdraw path: `withdrawToOwner` or `sweepToOwner` -> Telegram approval -> callback resume
 9. only then attempt a tiny live execution
 
+### 7.1 Uniswap LP roundtrip checklist
+
+Use the dedicated live roundtrip script when you want a replayable proof bundle:
+
+```bash
+npm run smoke:uniswap-lp-roundtrip
+```
+
+Required env before running:
+
+- `PHALANX_LP_INVESTMENT_ID`
+- `PHALANX_LP_AMOUNT`
+- `PHALANX_LP_AMOUNT_SECONDARY`
+- `PHALANX_LP_TICK_LOWER`
+- `PHALANX_LP_TICK_UPPER`
+
+Optional env:
+
+- `PHALANX_LP_CHAIN=base`
+- `PHALANX_LP_TOKEN_A`, `PHALANX_LP_TOKEN_B`
+- `PHALANX_LP_TOKEN`
+- `PHALANX_LP_TOKEN_SECONDARY`
+- `PHALANX_LP_AMOUNT_SECONDARY`
+- `PHALANX_LP_DISCOVERY_PAGES`
+- `PHALANX_LP_WITHDRAW_PLATFORM_ID`
+- `PHALANX_LP_WITHDRAW_TOKEN_ID`
+- `PHALANX_LP_WITHDRAW_RATIO`
+- `PHALANX_LP_WITHDRAW_AMOUNT`
+- `PHALANX_LP_RANGE` as planner-only context
+
+Interpretation rules:
+
+1. `phalanx_uniswap_liquidity_plan` is the planning source of truth for pool candidates and suggested range context
+2. `onchainos defi list` / `positions` / `position-detail` are the execution-time discovery sources for `investmentId`, `platformId`, and `tokenId`
+3. no local metadata cache is used in this round; before withdraw, refresh identifiers from `onchainos`
+4. operator-supplied LP amounts must already be in minimal units
+5. live Uniswap V3 execution on Base now uses direct `NonfungiblePositionManager` calldata through `onchainos wallet contract-call`, not the default high-level `onchainos defi invest/withdraw` LP route
+
+Judge-facing explanation:
+
+- reference note: `docs/uniswap-v3-direct-execution.md`
+- keep this note in the demo packet so reviewers understand this is a deliberate integration fix, not an omitted feature
+
+Expected evidence from the script:
+
+- planner output with downstream payload template
+- product discovery pages scanned against the requested `investmentId`
+- deposit action result and Telegram callback result
+- post-deposit positions / position-detail output
+- derived withdraw payload
+- withdraw action result and Telegram callback result
+- post-withdraw positions / position-detail output
+
 ## 8. Productization gates before demo
 
 Confirm all of the following before recording or presenting:
@@ -198,6 +251,7 @@ Suggested setup:
 5. confirm callback summary says the `uniswap-v3` policy item was widened and the LP add-liquidity action resumed
 6. invoke the same `depositLpPosition` action again and confirm it executes without another approval
 7. keep `pancakeswap-v3` as a secondary capability probe rather than the main blocked demo target
+8. if you need real-chain closure instead of governance-only proof, run `npm run smoke:uniswap-lp-roundtrip` after the approval path is confirmed
 
 ### Segment D: funds return to owner
 
@@ -221,6 +275,7 @@ Capture these artifacts during the demo rehearsal:
 - startup summary showing `mode`, readiness, and guardian surface state
 - test output from the productization regression suite
 - Telegram approval screenshot for blocked `Uniswap LP add liquidity`
+- roundtrip script JSON output containing requested `investmentId`, scanned discovery pages, and derived withdraw identifiers
 - Telegram approval screenshot for `withdraw to owner` or `sweep to owner`
 - Telegram execution report screenshot for guardian execution
 - tx hashes or synthetic governance refs for whitelist write and resumed execution
@@ -228,6 +283,7 @@ Capture these artifacts during the demo rehearsal:
 - Uniswap planner evidence showing official skill discovery plus downstream runtime target/action/payload template
 - x402 settlement line or proof artifact
 - proof that the same `uniswap-v3` LP action executes without another approval after the policy item is widened
+- proof that LP withdraw identifiers were refreshed from `onchainos positions` / `position-detail` rather than a stale local cache
 - proof that owner withdrawal uses direct approval rather than whitelist governance
 
 ## 11. Validation gates

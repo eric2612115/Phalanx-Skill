@@ -8,6 +8,7 @@
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "smoke:live": "tsx scripts/live-smoke.ts",
+    "smoke:uniswap-lp-roundtrip": "tsx scripts/uniswap-lp-live-roundtrip.ts",
     "smoke:morpho": "tsx scripts/morpho-live-smoke.ts",
     "smoke:x402": "tsx scripts/x402-live-smoke.ts",
     "smoke:telegram-approval": "tsx scripts/telegram-approval-live-smoke.ts",

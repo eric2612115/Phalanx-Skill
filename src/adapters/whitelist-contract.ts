@@ -474,6 +474,7 @@ export async function writeWhitelistContractAllowance(
     const publicClient = createPublicClient({ transport: http(rpcUrl) });
     const txHash = await walletClient.writeContract({
       account,
+      chain: undefined,
       address: policyAddress,
       abi,
       functionName,

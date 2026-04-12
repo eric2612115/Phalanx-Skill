@@ -130,14 +130,25 @@ async function main(): Promise<void> {
   const payload = {
     ...(downstream.payloadTemplate ?? {}),
     investmentId:
+      process.env.PHALANX_LP_INVESTMENT_ID ??
       process.env.PHALANX_SMOKE_LP_INVESTMENT_ID ??
       ((downstream.payloadTemplate?.investmentId as string | undefined) || "uniswap-base-weth-usdc-v3"),
     amount:
+      process.env.PHALANX_LP_AMOUNT ??
       process.env.PHALANX_SMOKE_LP_AMOUNT ??
       ((downstream.payloadTemplate?.amount as string | undefined) || "1000000"),
     amountSecondary:
+      process.env.PHALANX_LP_AMOUNT_SECONDARY ??
       process.env.PHALANX_SMOKE_LP_AMOUNT_SECONDARY ??
       ((downstream.payloadTemplate?.amountSecondary as string | undefined) || "500000000000000"),
+    tokenSecondary:
+      process.env.PHALANX_LP_TOKEN_SECONDARY ??
+      process.env.PHALANX_SMOKE_LP_TOKEN_SECONDARY ??
+      ((downstream.payloadTemplate?.tokenSecondary as string | undefined) || "ETH"),
+    range:
+      process.env.PHALANX_LP_RANGE ??
+      process.env.PHALANX_SMOKE_LP_RANGE ??
+      ((downstream.payloadTemplate?.range as string | undefined) || "5"),
   };
 
   const actionResult = await host.invokeMcp("phalanx_action", {

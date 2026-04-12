@@ -60,6 +60,13 @@ export type OnchainosWalletBalanceInput = {
   readonly env?: NodeJS.ProcessEnv;
 };
 
+export type OnchainosDefiListInput = {
+  readonly chain: string;
+  readonly pageNum?: number;
+  readonly timeoutMs?: number;
+  readonly env?: NodeJS.ProcessEnv;
+};
+
 export type OnchainosDefiPositionsInput = {
   readonly address: string;
   readonly chains: readonly string[];
@@ -72,6 +79,13 @@ export type OnchainosDefiPositionDetailInput = {
   readonly address: string;
   readonly chain: string;
   readonly platformId: string;
+  readonly timeoutMs?: number;
+  readonly env?: NodeJS.ProcessEnv;
+};
+
+export type OnchainosDefiDetailInput = {
+  readonly investmentId: string;
+  readonly chain?: string;
   readonly timeoutMs?: number;
   readonly env?: NodeJS.ProcessEnv;
 };
@@ -114,7 +128,55 @@ export type OnchainosDefiPositionsResult = {
   readonly exitCode?: number | null;
 };
 
+export type OnchainosDefiListResult = {
+  readonly provider: "onchainos";
+  readonly status: "completed" | "failed" | "tool_missing";
+  readonly argv: string[];
+  readonly summary: string;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly exitCode?: number | null;
+};
+
+export type OnchainosDefiProduct = {
+  readonly chainIndex: string;
+  readonly investmentId: string;
+  readonly name: string;
+  readonly platformName: string;
+  readonly productGroup?: string;
+  readonly detailPath?: string;
+};
+
+export type OnchainosDefiUnderlyingToken = {
+  readonly tokenAddress: string;
+  readonly tokenSymbol: string;
+  readonly isBaseToken: boolean;
+};
+
+export type OnchainosDefiDetail = {
+  readonly investmentId: string;
+  readonly contract?: string;
+  readonly feeRate?: string;
+  readonly currentPrice?: string;
+  readonly underlyingToken: OnchainosDefiUnderlyingToken[];
+};
+
+export type OnchainosDefiPositionIdentifiers = {
+  readonly platformIds: string[];
+  readonly tokenIds: string[];
+};
+
 export type OnchainosDefiPositionDetailResult = {
+  readonly provider: "onchainos";
+  readonly status: "completed" | "failed" | "tool_missing";
+  readonly argv: string[];
+  readonly summary: string;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly exitCode?: number | null;
+};
+
+export type OnchainosDefiDetailResult = {
   readonly provider: "onchainos";
   readonly status: "completed" | "failed" | "tool_missing";
   readonly argv: string[];
@@ -162,11 +224,12 @@ export type OnchainosExecutionCommandInput =
       readonly token: string;
       readonly amount: string;
       readonly chain: string;
+      readonly tokenSecondary?: string;
       readonly amountSecondary?: string;
-      readonly feeTier?: string;
       readonly tickLower?: string;
       readonly tickUpper?: string;
-      readonly poolAddress?: string;
+      readonly range?: string;
+      readonly tokenId?: string;
       readonly slippage?: string;
     }
   | {
@@ -175,12 +238,11 @@ export type OnchainosExecutionCommandInput =
       readonly investmentId: string;
       readonly address: string;
       readonly chain: string;
+      readonly platformId?: string;
       readonly tokenId?: string;
       readonly ratio?: string;
       readonly amount?: string;
       readonly slippage?: string;
-      readonly poolAddress?: string;
-      readonly collectFees?: boolean;
     };
 
 export type OnchainosSwapExecutionCommandInput = {
@@ -431,14 +493,12 @@ export function buildOnchainosExecutionCommand(
         input.amount,
         "--chain",
         input.chain,
-        "--platform-id",
-        input.protocol,
       ];
-      if (input.amountSecondary) {
-        argv.push("--amount-secondary", input.amountSecondary);
+      if (input.tokenSecondary) {
+        argv.push("--token2", input.tokenSecondary);
       }
-      if (input.feeTier) {
-        argv.push("--fee-tier", input.feeTier);
+      if (input.amountSecondary) {
+        argv.push("--amount2", input.amountSecondary);
       }
       if (input.tickLower) {
         argv.push("--tick-lower", input.tickLower);
@@ -446,8 +506,11 @@ export function buildOnchainosExecutionCommand(
       if (input.tickUpper) {
         argv.push("--tick-upper", input.tickUpper);
       }
-      if (input.poolAddress) {
-        argv.push("--pool-address", input.poolAddress);
+      if (input.range) {
+        argv.push("--range", input.range);
+      }
+      if (input.tokenId) {
+        argv.push("--token-id", input.tokenId);
       }
       if (input.slippage) {
         argv.push("--slippage", input.slippage);
@@ -465,9 +528,10 @@ export function buildOnchainosExecutionCommand(
         input.address,
         "--chain",
         input.chain,
-        "--platform-id",
-        input.protocol,
       ];
+      if (input.platformId) {
+        argv.push("--platform-id", input.platformId);
+      }
       if (input.tokenId) {
         argv.push("--token-id", input.tokenId);
       }
@@ -479,12 +543,6 @@ export function buildOnchainosExecutionCommand(
       }
       if (input.slippage) {
         argv.push("--slippage", input.slippage);
-      }
-      if (input.poolAddress) {
-        argv.push("--pool-address", input.poolAddress);
-      }
-      if (input.collectFees) {
-        argv.push("--collect-fees");
       }
       return { argv };
     }
@@ -511,6 +569,14 @@ export function buildOnchainosDefiPositionsCommand(input: {
   return { argv };
 }
 
+export function buildOnchainosDefiListCommand(input: OnchainosDefiListInput): OnchainosExecutionCommand {
+  const argv = ["onchainos", "defi", "list", "--chain", input.chain];
+  if (input.pageNum !== undefined) {
+    argv.push("--page-num", String(input.pageNum));
+  }
+  return { argv };
+}
+
 export function buildOnchainosDefiPositionDetailCommand(input: {
   readonly address: string;
   readonly chain: string;
@@ -529,6 +595,14 @@ export function buildOnchainosDefiPositionDetailCommand(input: {
       input.platformId,
     ],
   };
+}
+
+export function buildOnchainosDefiDetailCommand(input: OnchainosDefiDetailInput): OnchainosExecutionCommand {
+  const argv = ["onchainos", "defi", "detail", "--investment-id", input.investmentId];
+  if (input.chain) {
+    argv.push("--chain", input.chain);
+  }
+  return { argv };
 }
 
 export function buildOnchainosSwapExecutionCommand(
@@ -694,6 +768,7 @@ export function buildOnchainosContractCallCommand(input: {
   readonly from: string;
   readonly to: string;
   readonly inputData: string;
+  readonly amt?: string;
   readonly force?: boolean;
 }): OnchainosExecutionCommand {
   const normalizedChain = normalizeOnchainosWalletChain(input.chain);
@@ -710,6 +785,9 @@ export function buildOnchainosContractCallCommand(input: {
     "--from",
     input.from,
   ];
+  if (input.amt) {
+    argv.push("--amt", input.amt);
+  }
   if (input.force) {
     argv.push("--force");
   }
@@ -796,6 +874,114 @@ function classifyDefiStdout(stdout: string): OnchainosCapability[] {
   }
 
   return out;
+}
+
+export function parseOnchainosDefiProducts(stdout: string): OnchainosDefiProduct[] {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    const root = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    const data = root.data && typeof root.data === "object" ? (root.data as Record<string, unknown>) : {};
+    const list = Array.isArray(data.list) ? data.list : [];
+    return list
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item) => ({
+        chainIndex: typeof item.chainIndex === "string" ? item.chainIndex : String(item.chainIndex ?? ""),
+        investmentId:
+          typeof item.investmentId === "string" || typeof item.investmentId === "number"
+            ? String(item.investmentId)
+            : "",
+        name: typeof item.name === "string" ? item.name : "",
+        platformName: typeof item.platformName === "string" ? item.platformName : "",
+        productGroup: typeof item.productGroup === "string" ? item.productGroup : undefined,
+        detailPath: typeof item.detailPath === "string" ? item.detailPath : undefined,
+      }))
+      .filter((item) => item.investmentId.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+export function parseOnchainosDefiDetail(stdout: string): OnchainosDefiDetail | null {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    const root = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    const data = root.data && typeof root.data === "object" ? (root.data as Record<string, unknown>) : {};
+    const investmentId =
+      typeof data.investmentId === "string" || typeof data.investmentId === "number"
+        ? String(data.investmentId)
+        : "";
+    if (!investmentId) {
+      return null;
+    }
+    const underlyingRaw = Array.isArray(data.underlyingToken) ? data.underlyingToken : [];
+    return {
+      investmentId,
+      contract: typeof data.contract === "string" && data.contract.length > 0 ? data.contract : undefined,
+      feeRate: typeof data.feeRate === "string" && data.feeRate.length > 0 ? data.feeRate : undefined,
+      currentPrice:
+        typeof data.currentPrice === "string" && data.currentPrice.length > 0 ? data.currentPrice : undefined,
+      underlyingToken: underlyingRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+        .map((item) => ({
+          tokenAddress: typeof item.tokenAddress === "string" ? item.tokenAddress : "",
+          tokenSymbol: typeof item.tokenSymbol === "string" ? item.tokenSymbol : "",
+          isBaseToken: item.isBaseToken === true,
+        }))
+        .filter((item) => item.tokenSymbol.length > 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function walkForStringKeys(
+  value: unknown,
+  platformIds: Set<string>,
+  tokenIds: Set<string>,
+): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      walkForStringKeys(item, platformIds, tokenIds);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(record)) {
+    if (
+      (key === "analysisPlatformId" || key === "platformId") &&
+      (typeof child === "string" || typeof child === "number")
+    ) {
+      platformIds.add(String(child));
+    }
+    if (
+      (key === "tokenId" || key === "nftTokenId") &&
+      (typeof child === "string" || typeof child === "number")
+    ) {
+      tokenIds.add(String(child));
+    }
+    walkForStringKeys(child, platformIds, tokenIds);
+  }
+}
+
+export function extractOnchainosDefiPositionIdentifiers(stdout: string): OnchainosDefiPositionIdentifiers {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    const platformIds = new Set<string>();
+    const tokenIds = new Set<string>();
+    walkForStringKeys(parsed, platformIds, tokenIds);
+    return {
+      platformIds: [...platformIds],
+      tokenIds: [...tokenIds],
+    };
+  } catch {
+    return {
+      platformIds: [],
+      tokenIds: [],
+    };
+  }
 }
 
 /**
@@ -986,6 +1172,51 @@ export async function readOnchainosWalletBalance(
   };
 }
 
+export async function readOnchainosDefiList(
+  input: OnchainosDefiListInput,
+): Promise<OnchainosDefiListResult> {
+  const argv = buildOnchainosDefiListCommand(input).argv;
+  const [command, ...args] = argv;
+  const result = await runCmd(command, args, input.timeoutMs ?? 120_000, {
+    ...process.env,
+    ...(input.env ?? process.env),
+    ...buildOnchainosRuntimeEnv(input.env ?? process.env),
+  });
+
+  if (result.spawnError?.code === "ENOENT") {
+    return {
+      provider: "onchainos",
+      status: "tool_missing",
+      argv,
+      summary: "onchainos binary not found on PATH",
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  if (!result.ok) {
+    return {
+      provider: "onchainos",
+      status: "failed",
+      argv,
+      summary: trimSummary(result.stderr || result.stdout || "onchainos defi list command failed"),
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  return {
+    provider: "onchainos",
+    status: "completed",
+    argv,
+    summary: "onchainos defi list command completed",
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+  };
+}
+
 export async function readOnchainosDefiPositions(
   input: OnchainosDefiPositionsInput,
 ): Promise<OnchainosDefiPositionsResult> {
@@ -1070,6 +1301,49 @@ export async function readOnchainosDefiPositionDetail(
     status: "completed",
     argv,
     summary: "onchainos defi position-detail command completed",
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+  };
+}
+
+export async function readOnchainosDefiDetail(input: OnchainosDefiDetailInput): Promise<OnchainosDefiDetailResult> {
+  const argv = buildOnchainosDefiDetailCommand(input).argv;
+  const [command, ...args] = argv;
+  const result = await runCmd(command, args, input.timeoutMs ?? 120_000, {
+    ...process.env,
+    ...(input.env ?? process.env),
+    ...buildOnchainosRuntimeEnv(input.env ?? process.env),
+  });
+
+  if (result.spawnError?.code === "ENOENT") {
+    return {
+      provider: "onchainos",
+      status: "tool_missing",
+      argv,
+      summary: "onchainos binary not found on PATH",
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  if (!result.ok) {
+    return {
+      provider: "onchainos",
+      status: "failed",
+      argv,
+      summary: trimSummary(result.stderr || result.stdout || "onchainos defi detail command failed"),
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  return {
+    provider: "onchainos",
+    status: "completed",
+    argv,
+    summary: "onchainos defi detail command completed",
     stdout: result.stdout,
     stderr: result.stderr,
     exitCode: result.exitCode,
@@ -1270,46 +1544,21 @@ export async function executeOnchainosSwapExecution(
   };
 }
 
-export async function executeOnchainosDefiExecution(
-  input: OnchainosExecutionCommandInput,
+export async function executeOnchainosExecutionSteps(
+  input: {
+    readonly chain: string;
+    readonly argv: string[];
+    readonly steps: readonly OnchainosDefiExecutionStep[];
+  },
   env: NodeJS.ProcessEnv = process.env,
   hooks: ExecuteOnchainosDefiExecutionHooks = {},
 ): Promise<OnchainosDefiExecutionResult> {
   const run = hooks.runCmdImpl ?? runCmd;
-  const command = buildOnchainosExecutionCommand(input);
-  const [bin, ...args] = command.argv;
   const runtimeEnv = {
     ...env,
     ...buildOnchainosRuntimeEnv(env),
   };
-  const result = await run(bin, args, 120_000, runtimeEnv);
-
-  if (result.spawnError?.code === "ENOENT") {
-    return {
-      provider: "onchainos",
-      lane: "defi_execute",
-      status: "tool_missing",
-      argv: command.argv,
-      summary: "onchainos binary not found on PATH",
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    };
-  }
-
-  if (!result.ok) {
-    return {
-      provider: "onchainos",
-      lane: "defi_execute",
-      status: "failed",
-      argv: command.argv,
-      summary: trimSummary(result.stderr || result.stdout || "onchainos defi execution failed"),
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    };
-  }
-
-  const executedSteps = parseOnchainosDefiExecutionPlan(result.stdout);
+  const executedSteps = [...input.steps];
   const planSteps = toExecutionPlanSteps(executedSteps);
   const coordinatorResult = await executeExecutionPlan(planSteps, {
     confirmationPolicy: {
@@ -1323,12 +1572,22 @@ export async function executeOnchainosDefiExecution(
     maxPollAttempts: hooks.maxPollAttempts,
     executeStep: async (
       step,
-    ): Promise<BroadcastResult<OnchainosDefiExecutionStep> | { status: "failed" | "tool_missing"; summary: string; stdout?: string; stderr?: string; exitCode?: number | null }> => {
+    ): Promise<
+      BroadcastResult<OnchainosDefiExecutionStep> | {
+        status: "failed" | "tool_missing";
+        summary: string;
+        stdout?: string;
+        stderr?: string;
+        exitCode?: number | null;
+      }
+    > => {
       const call = buildOnchainosContractCallCommand({
         chain: input.chain,
         from: step.payload.from,
         to: step.payload.to,
         inputData: step.payload.serializedData,
+        amt:
+          step.payload.value && step.payload.value !== "0x0" ? BigInt(step.payload.value).toString(10) : undefined,
         force: true,
       });
       const [callBin, ...callArgs] = call.argv;
@@ -1395,12 +1654,13 @@ export async function executeOnchainosDefiExecution(
       );
     },
   });
+
   if (coordinatorResult.status !== "completed") {
     return {
       provider: "onchainos",
       lane: "defi_execute",
       status: coordinatorResult.status,
-      argv: command.argv,
+      argv: input.argv,
       summary: coordinatorResult.summary,
       stdout: coordinatorResult.stdout,
       stderr: coordinatorResult.stderr,
@@ -1414,15 +1674,75 @@ export async function executeOnchainosDefiExecution(
     provider: "onchainos",
     lane: "defi_execute",
     status: "completed",
-    argv: command.argv,
+    argv: input.argv,
     summary:
       executedSteps.length > 0
-        ? `onchainos defi execution completed with ${executedSteps.length} contract-call step(s)`
-        : "onchainos defi execution command completed",
+        ? `onchainos contract-call execution completed with ${executedSteps.length} step(s)`
+        : "onchainos contract-call execution completed",
+    executedSteps,
+    txRefs: coordinatorResult.broadcasts.map((broadcast) => broadcast.txHash),
+  };
+}
+
+export async function executeOnchainosDefiExecution(
+  input: OnchainosExecutionCommandInput,
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: ExecuteOnchainosDefiExecutionHooks = {},
+): Promise<OnchainosDefiExecutionResult> {
+  const run = hooks.runCmdImpl ?? runCmd;
+  const command = buildOnchainosExecutionCommand(input);
+  const [bin, ...args] = command.argv;
+  const runtimeEnv = {
+    ...env,
+    ...buildOnchainosRuntimeEnv(env),
+  };
+  const result = await run(bin, args, 120_000, runtimeEnv);
+
+  if (result.spawnError?.code === "ENOENT") {
+    return {
+      provider: "onchainos",
+      lane: "defi_execute",
+      status: "tool_missing",
+      argv: command.argv,
+      summary: "onchainos binary not found on PATH",
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  if (!result.ok) {
+    return {
+      provider: "onchainos",
+      lane: "defi_execute",
+      status: "failed",
+      argv: command.argv,
+      summary: trimSummary(result.stderr || result.stdout || "onchainos defi execution failed"),
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
+  }
+
+  const executedSteps = parseOnchainosDefiExecutionPlan(result.stdout);
+  const executed = await executeOnchainosExecutionSteps(
+    {
+      chain: input.chain,
+      argv: command.argv,
+      steps: executedSteps,
+    },
+    env,
+    hooks,
+  );
+  return {
+    ...executed,
     stdout: result.stdout,
     stderr: result.stderr,
     exitCode: result.exitCode,
-    executedSteps,
-    txRefs: coordinatorResult.broadcasts.map((broadcast) => broadcast.txHash),
+    summary:
+      executed.status === "completed"
+        ? executedSteps.length > 0
+          ? `onchainos defi execution completed with ${executedSteps.length} contract-call step(s)`
+          : "onchainos defi execution command completed"
+        : executed.summary,
   };
 }

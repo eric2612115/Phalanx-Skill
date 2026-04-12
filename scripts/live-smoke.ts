@@ -82,15 +82,23 @@ function buildSyntheticLpExecutionPayload(payloadTemplate: Record<string, unknow
     investmentId:
       typeof payloadTemplate.investmentId === "string" && payloadTemplate.investmentId.length > 0
         ? payloadTemplate.investmentId
-        : "uniswap-base-weth-usdc-v3",
+        : process.env.PHALANX_LP_INVESTMENT_ID ?? "uniswap-base-weth-usdc-v3",
     amount:
       typeof payloadTemplate.amount === "string" && payloadTemplate.amount.length > 0
         ? payloadTemplate.amount
-        : "1000000",
+        : process.env.PHALANX_LP_AMOUNT ?? "1000000",
     amountSecondary:
       typeof payloadTemplate.amountSecondary === "string" && payloadTemplate.amountSecondary.length > 0
         ? payloadTemplate.amountSecondary
-        : "500000000000000",
+        : process.env.PHALANX_LP_AMOUNT_SECONDARY ?? "500000000000000",
+    tokenSecondary:
+      typeof payloadTemplate.tokenSecondary === "string" && payloadTemplate.tokenSecondary.length > 0
+        ? payloadTemplate.tokenSecondary
+        : process.env.PHALANX_LP_TOKEN_SECONDARY ?? "ETH",
+    range:
+      typeof payloadTemplate.range === "string" && payloadTemplate.range.length > 0
+        ? payloadTemplate.range
+        : process.env.PHALANX_LP_RANGE ?? "5",
   };
 }
 

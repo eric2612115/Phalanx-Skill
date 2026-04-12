@@ -5,6 +5,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 
 import {
   buildOnchainosContractCallCommand,
+  buildOnchainosDefiListCommand,
   buildOnchainosDefiPositionDetailCommand,
   buildOnchainosDefiPositionsCommand,
   buildOnchainosExecutionCommand,
@@ -17,10 +18,13 @@ import {
   executeOnchainosDefiExecution,
   executeOnchainosWalletSend,
   executeOnchainosX402Payment,
+  extractOnchainosDefiPositionIdentifiers,
   listOnchainosCapabilities,
+  parseOnchainosDefiProducts,
   parseOnchainosDefiExecutionPlan,
   parseOnchainosTxDetailStatus,
   portfolioPathContract,
+  readOnchainosDefiList,
   readOnchainosWalletBalance,
   readOnchainosDefiPositionDetail,
   readOnchainosDefiPositions,
@@ -681,19 +685,21 @@ describe("onchainos adapter (contract)", () => {
       chain: "base",
       token: "USDC",
       amount: "1000000",
+      tokenSecondary: "ETH",
       amountSecondary: "500000000000000",
-      feeTier: "3000",
-      tickLower: "-887220",
-      tickUpper: "887220",
-      poolAddress: "0x2222222222222222222222222222222222222222",
+      range: "5",
     });
 
     expect(cmd.argv.join(" ")).toContain("onchainos defi invest");
     expect(cmd.argv).toContain("--investment-id");
     expect(cmd.argv).toContain("uniswap-base-weth-usdc-v3");
-    expect(cmd.argv).toContain("--platform-id");
-    expect(cmd.argv).toContain("uniswap-v3");
-    expect(cmd.argv).toContain("--pool-address");
+    expect(cmd.argv).toContain("--token2");
+    expect(cmd.argv).toContain("ETH");
+    expect(cmd.argv).toContain("--amount2");
+    expect(cmd.argv).toContain("500000000000000");
+    expect(cmd.argv).toContain("--range");
+    expect(cmd.argv).toContain("5");
+    expect(cmd.argv).not.toContain("--platform-id");
   });
 
   it("buildOnchainosExecutionCommand shapes an LP withdraw argv", () => {
@@ -703,18 +709,81 @@ describe("onchainos adapter (contract)", () => {
       investmentId: "pancake-bsc-bnb-usdt-v3",
       address: "0x1111111111111111111111111111111111111111",
       chain: "bsc",
+      platformId: "98765",
       tokenId: "12345",
       ratio: "1",
-      collectFees: true,
-      poolAddress: "0x3333333333333333333333333333333333333333",
     });
 
     expect(cmd.argv.join(" ")).toContain("onchainos defi withdraw");
     expect(cmd.argv).toContain("--platform-id");
-    expect(cmd.argv).toContain("pancakeswap-v3");
+    expect(cmd.argv).toContain("98765");
     expect(cmd.argv).toContain("--token-id");
     expect(cmd.argv).toContain("12345");
-    expect(cmd.argv).toContain("--collect-fees");
+    expect(cmd.argv).not.toContain("--collect-fees");
+    expect(cmd.argv).not.toContain("--pool-address");
+  });
+
+  it("buildOnchainosDefiListCommand shapes a paginated product discovery argv", () => {
+    const cmd = buildOnchainosDefiListCommand({
+      chain: "base",
+      pageNum: 3,
+    });
+
+    expect(cmd.argv).toEqual(["onchainos", "defi", "list", "--chain", "base", "--page-num", "3"]);
+  });
+
+  it("parseOnchainosDefiProducts normalizes numeric investment ids into strings", () => {
+    const products = parseOnchainosDefiProducts(
+      JSON.stringify({
+        ok: true,
+        data: {
+          list: [
+            {
+              chainIndex: "8453",
+              investmentId: 22709,
+              name: "USDC/ETH",
+              platformName: "Uniswap V3",
+              productGroup: "LP",
+              detailPath: "/defi/uniswap/22709",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(products).toEqual([
+      {
+        chainIndex: "8453",
+        investmentId: "22709",
+        name: "USDC/ETH",
+        platformName: "Uniswap V3",
+        productGroup: "LP",
+        detailPath: "/defi/uniswap/22709",
+      },
+    ]);
+  });
+
+  it("extractOnchainosDefiPositionIdentifiers finds platform and token ids recursively", () => {
+    const identifiers = extractOnchainosDefiPositionIdentifiers(
+      JSON.stringify({
+        ok: true,
+        data: {
+          groups: [
+            {
+              analysisPlatformId: "777",
+              positions: [
+                {
+                  tokenId: "12345",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(identifiers.platformIds).toEqual(["777"]);
+    expect(identifiers.tokenIds).toEqual(["12345"]);
   });
 
   it("parseOnchainosDefiExecutionPlan extracts contract-call steps from stdout", () => {
@@ -1219,6 +1288,18 @@ describe("onchainos adapter (contract)", () => {
     expect(result.provider).toBe("onchainos");
     expect(result.status).toBe("tool_missing");
     expect(result.argv.join(" ")).toContain("defi positions");
+  });
+
+  it("readOnchainosDefiList degrades cleanly when the binary is missing", async () => {
+    const result = await readOnchainosDefiList({
+      chain: "base",
+      pageNum: 1,
+      env: { PATH: "/definitely/missing" } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.provider).toBe("onchainos");
+    expect(result.status).toBe("tool_missing");
+    expect(result.argv.join(" ")).toContain("defi list");
   });
 
   it("readOnchainosDefiPositionDetail degrades cleanly when the binary is missing", async () => {

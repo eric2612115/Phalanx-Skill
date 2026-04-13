@@ -1,6 +1,45 @@
 import { describe, expect, it } from "vitest";
 
 describe("telegram live transport", () => {
+  it("telegram approval smoke can force READY from operator-ready live config", async () => {
+    const { resolveTelegramApprovalSmokeLifecycle } = await import("../scripts/telegram-approval-live-smoke.ts");
+
+    expect(
+      resolveTelegramApprovalSmokeLifecycle({
+        PHALANX_RUNTIME_MODE: "live",
+        TELEGRAM_BOT_TOKEN: "123456:telegram-secret-token",
+        TELEGRAM_ALLOWED_USER_ID: "42",
+        OKX_API_KEY: "okx-key",
+        OKX_API_SECRET: "okx-secret",
+        OKX_API_PASSPHRASE: "okx-pass",
+        TEST_WALLET_ADDRESS: "0xwallet000000000000000000000000000000000001",
+      }),
+    ).toBe("READY");
+
+    expect(
+      resolveTelegramApprovalSmokeLifecycle({
+        PHALANX_RUNTIME_MODE: "live",
+        TELEGRAM_BOT_TOKEN: "123456:telegram-secret-token",
+        OKX_API_KEY: "okx-key",
+        OKX_API_SECRET: "okx-secret",
+        OKX_API_PASSPHRASE: "okx-pass",
+        TEST_WALLET_ADDRESS: "0xwallet000000000000000000000000000000000001",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("telegram approval smoke strips uniswap-v3 from the allowlist to force the blocked approval lane", async () => {
+    const { buildTelegramApprovalSmokeConfigValues } = await import("../scripts/telegram-approval-live-smoke.ts");
+
+    const next = buildTelegramApprovalSmokeConfigValues({
+      WHITELIST_TARGETS: "uniswap-v3,pancakeswap-v3",
+    });
+
+    expect(next.WHITELIST_TARGETS).toContain("pancakeswap-v3");
+    expect(next.WHITELIST_TARGETS).toContain("whitelist-admin");
+    expect(next.WHITELIST_TARGETS).not.toContain("uniswap-v3");
+  });
+
   it("sends approval prompts to the configured owner chat", async () => {
     const { createTelegramApprovalNotifier } = await import("../src/telegram/live.ts");
 
@@ -82,12 +121,56 @@ describe("telegram live transport", () => {
     expect(edited.toLowerCase()).toMatch(/approved|executed/);
   });
 
+  it("routes READY-state operator text through the bounded catalog", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
+    const { createSetupSession } = await import("../src/telegram/setup.ts");
+
+    const session = createSetupSession();
+    session.lifecycle = "READY";
+    session.ownerUserId = "7";
+    session.wizardStep = null;
+
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      setupSession: session,
+      whitelistTargets: ["pool"],
+    });
+
+    const handlers = new Map<string, (ctx: any) => Promise<void>>();
+    const fakeBot = {
+      on(event: string, handler: (ctx: any) => Promise<void>) {
+        handlers.set(event, handler);
+        return this;
+      },
+      catch() {
+        return this;
+      },
+    };
+
+    registerTelegramBotHandlers(fakeBot as never, host);
+
+    const replies: string[] = [];
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "status" },
+      reply: async (text: string) => {
+        replies.push(text);
+      },
+    });
+
+    expect(replies.length).toBeGreaterThan(0);
+    expect(replies.join("\n").toLowerCase()).toMatch(/ready|lifecycle|pending|guidance|mode/i);
+  });
+
   it("can bind a real notifier and produce a whitelist-change approval for smoke scripts", async () => {
     const { createPhalanxHost } = await import("../src/app/host.ts");
     const { createTelegramApprovalNotifier } = await import("../src/telegram/live.ts");
 
     const sent: Array<{ chatId: number; text: string }> = [];
     const host = createPhalanxHost({
+      lifecycle: "READY",
       approvalNotifyTimeoutMs: 2_000,
       whitelistTargets: ["whitelist-admin"],
       configValues: {
@@ -100,6 +183,11 @@ describe("telegram live transport", () => {
         OMRATE_API_KEY: "omrate-key",
         OMRATE_API_BASE_URL: "https://omrate.io/api",
         XLAYER_RPC_URL: "https://rpc.example",
+        TEST_WALLET_ADDRESS: "0xwallet000000000000000000000000000000000001",
+        POLICY_OWNER_KEY: "0xabc",
+        WHITELIST_POLICY_ADDRESS: "0x123",
+        PHALANX_OWNER_EVM_ADDRESS: "0xowner",
+        BASE_RPC_URL: "https://base.rpc",
       },
     });
 

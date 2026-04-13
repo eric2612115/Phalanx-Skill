@@ -12,8 +12,21 @@ export type RuntimeMode = "dry_run" | "live";
 
 export interface RuntimeReadinessSummary {
   readonly mode: RuntimeMode;
+  /**
+   * Legacy name: matches {@link demoReady} (full demo / execution prerequisites in live mode).
+   * Prefer {@link operatorReady} and {@link demoReady} for install and operator UX.
+   */
   readonly liveReady: boolean;
+  /** Live: Telegram bot + OKX/onchainos credentials + execution wallet baseline. */
+  readonly operatorReady: boolean;
+  /** Live: operator tier plus governance, owner EVM binding, and Base RPC for mainline execution. */
+  readonly demoReady: boolean;
+  /** Keys still missing for demo-ready (strictest install checklist). */
   readonly missing: readonly string[];
+  /** Keys missing for operator tier only. */
+  readonly operatorMissing: readonly string[];
+  /** Keys missing for demo tier (includes operator keys when absent). */
+  readonly demoMissing: readonly string[];
   readonly masked: Readonly<Record<string, string>>;
 }
 
@@ -41,25 +54,34 @@ export interface RuntimeConfig {
     readonly ownerKey?: string;
     readonly policyAddress?: string;
   };
+  readonly owner: {
+    readonly evmAddress?: string;
+  };
   readonly wallet: {
     readonly testAddress?: string;
   };
 }
 
-const BASE_LIVE_REQUIRED_KEYS = [
+/** Operator-facing OmRate HTTP entrypoint when the operator does not override env. */
+const DEFAULT_OMRATE_API_BASE_URL = "https://api.omrate.com";
+
+/** Official X Layer mainnet JSON-RPC (chain id 196) per OKX developer docs. */
+const DEFAULT_XLAYER_RPC_URL = "https://rpc.xlayer.tech";
+
+const OPERATOR_LIVE_REQUIRED_KEYS = [
   "TELEGRAM_BOT_TOKEN",
   "OKX_API_KEY",
   "OKX_API_SECRET",
   "OKX_API_PASSPHRASE",
-  "OMRATE_API_KEY",
-  "OMRATE_API_BASE_URL",
-  "XLAYER_RPC_URL",
 ] as const;
 
-const ADVANCED_CHAIN_POLICY_REQUIRED_KEYS = [
+const DEMO_LIVE_REQUIRED_KEYS = [
   "POLICY_OWNER_KEY",
   "WHITELIST_POLICY_ADDRESS",
+  "PHALANX_OWNER_EVM_ADDRESS",
+  "BASE_RPC_URL",
 ] as const;
+const EXECUTION_WALLET_SIGNAL = "EXECUTION_WALLET_SIGNAL";
 
 const SENSITIVE_KEY_HINTS = /(TOKEN|SECRET|PASSPHRASE|KEY|PRIVATE|PASSWORD)/i;
 
@@ -67,7 +89,7 @@ const CONFIG_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
   OKX_API_KEY: ["OKX_WEB3_API_KEY", "OKX_X402_API_KEY"],
   OKX_API_SECRET: ["OKX_WEB3_API_SECRET", "OKX_X402_API_SECRET"],
   OKX_API_PASSPHRASE: ["OKX_WEB3_API_PASSPHRASE", "OKX_X402_API_PASSPHRASE"],
-  OMRATE_API_BASE_URL: ["OMRATE_API_BASE", "OMRATE_X402_API_BASE"],
+  OMRATE_API_BASE_URL: ["OMRATE_API_BASE", "OMRATE_X402_API_BASE", "AUTH_BACKEND_PUBLIC_URL"],
   BASE_RPC_URL: ["RPC_8453"],
   BSC_RPC_URL: ["RPC_56"],
   TEST_WALLET_ADDRESS: ["OMRATE_X402_BUYER_WALLET_ADDRESS", "OMRATE_WALLET_ADDRESS"],
@@ -146,6 +168,36 @@ function normalizedValue(values: Readonly<Record<string, string | undefined>>, k
   return undefined;
 }
 
+/** Resolve a config key including documented env aliases (install/check tooling). */
+export function getConfigEnvValue(
+  values: Readonly<Record<string, string | undefined>>,
+  key: string,
+): string | undefined {
+  return normalizedValue(values, key);
+}
+
+export function hasOkxBootstrapCredentials(values: Readonly<Record<string, string | undefined>>): boolean {
+  return (
+    normalizedValue(values, "OKX_API_KEY") !== undefined &&
+    normalizedValue(values, "OKX_API_SECRET") !== undefined &&
+    normalizedValue(values, "OKX_API_PASSPHRASE") !== undefined
+  );
+}
+
+export function getExecutionWalletAddress(
+  values: Readonly<Record<string, string | undefined>>,
+): string | undefined {
+  return (
+    normalizedRawValue(values.PHALANX_WALLET_ADDRESS) ??
+    normalizedRawValue(values.AGENT_WALLET_ADDRESS) ??
+    normalizedValue(values, "TEST_WALLET_ADDRESS")
+  );
+}
+
+export function hasExecutionWalletSignal(values: Readonly<Record<string, string | undefined>>): boolean {
+  return getExecutionWalletAddress(values) !== undefined;
+}
+
 export function normalizeRuntimeMode(value: string | undefined): RuntimeMode {
   return value?.trim().toLowerCase() === "live" ? "live" : "dry_run";
 }
@@ -167,13 +219,21 @@ export function summarizeRuntimeReadiness(
   values: Readonly<Record<string, string | undefined>>,
 ): RuntimeReadinessSummary {
   const mode = normalizeRuntimeMode(values.PHALANX_RUNTIME_MODE);
-  const requireChainPolicy = normalizedValue(values, "PHALANX_REQUIRE_CHAIN_POLICY") === "1";
-  const missing =
+
+  const operatorMissing: string[] =
+    mode === "live" ? OPERATOR_LIVE_REQUIRED_KEYS.filter((key) => normalizedValue(values, key) === undefined) : [];
+  if (mode === "live" && !hasExecutionWalletSignal(values)) {
+    operatorMissing.push(EXECUTION_WALLET_SIGNAL);
+  }
+
+  const demoOnlyMissing =
     mode === "live"
-      ? [...BASE_LIVE_REQUIRED_KEYS, ...(requireChainPolicy ? ADVANCED_CHAIN_POLICY_REQUIRED_KEYS : [])].filter(
-          (key) => normalizedValue(values, key) === undefined,
-        )
+      ? DEMO_LIVE_REQUIRED_KEYS.filter((key) => normalizedValue(values, key) === undefined)
       : [];
+
+  const demoMissing = [...operatorMissing, ...demoOnlyMissing];
+  const operatorReady = mode !== "live" || operatorMissing.length === 0;
+  const demoReady = mode !== "live" || demoMissing.length === 0;
 
   const maskedKeys = [
     "TELEGRAM_BOT_TOKEN",
@@ -187,6 +247,7 @@ export function summarizeRuntimeReadiness(
     "BASE_RPC_URL",
     "POLICY_OWNER_KEY",
     "WHITELIST_POLICY_ADDRESS",
+    "PHALANX_X402_PRIVATE_KEY",
     "TEST_WALLET_ADDRESS",
   ] as const;
 
@@ -198,8 +259,12 @@ export function summarizeRuntimeReadiness(
 
   return {
     mode,
-    liveReady: missing.length === 0,
-    missing,
+    liveReady: demoReady,
+    operatorReady,
+    demoReady,
+    missing: demoMissing,
+    operatorMissing,
+    demoMissing,
     masked,
   };
 }
@@ -220,16 +285,18 @@ export function buildRuntimeConfig(values: Readonly<Record<string, string | unde
     },
     omrate: {
       apiKey: normalizedValue(values, "OMRATE_API_KEY"),
-      baseUrl:
-        normalizedValue(values, "OMRATE_API_BASE_URL") ?? normalizedValue(values, "OMRATE_API_BASE"),
+      baseUrl: normalizedValue(values, "OMRATE_API_BASE_URL") ?? DEFAULT_OMRATE_API_BASE_URL,
     },
     chain: {
-      xlayerRpcUrl: normalizedValue(values, "XLAYER_RPC_URL"),
+      xlayerRpcUrl: normalizedValue(values, "XLAYER_RPC_URL") ?? DEFAULT_XLAYER_RPC_URL,
       baseRpcUrl: normalizedValue(values, "BASE_RPC_URL"),
     },
     whitelist: {
       ownerKey: normalizedValue(values, "POLICY_OWNER_KEY"),
       policyAddress: normalizedValue(values, "WHITELIST_POLICY_ADDRESS"),
+    },
+    owner: {
+      evmAddress: normalizedValue(values, "PHALANX_OWNER_EVM_ADDRESS"),
     },
     wallet: {
       testAddress: normalizedValue(values, "TEST_WALLET_ADDRESS"),

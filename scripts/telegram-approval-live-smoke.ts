@@ -1,10 +1,13 @@
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { Bot } from "grammy";
 
 import { createPhalanxHost } from "../src/app/host.js";
-import { loadRuntimeConfigValues } from "../src/config/store.js";
+import { buildRuntimeConfig, loadRuntimeConfigValues } from "../src/config/store.js";
+import { mergePolicyItemTargets } from "../src/policy/policy-items.js";
 import { createTelegramApprovalNotifier } from "../src/telegram/live.js";
+import type { RuntimeLifecycleState } from "../src/runtime/types.js";
 
 function callbackSummary(result: Awaited<ReturnType<ReturnType<typeof createPhalanxHost>["handleTelegramCallback"]>>): string {
   if (!result.handled) {
@@ -22,6 +25,7 @@ function callbackSummary(result: Awaited<ReturnType<ReturnType<typeof createPhal
 async function main(): Promise<void> {
   const configPath = process.env.PHALANX_CONFIG_PATH?.trim() || resolve(process.cwd(), "config.env");
   const runtimeEnv = loadRuntimeConfigValues(configPath, process.env);
+  const smokeEnv = buildTelegramApprovalSmokeConfigValues(runtimeEnv);
   const token = runtimeEnv.TELEGRAM_BOT_TOKEN?.trim();
   const ownerChatId = Number(runtimeEnv.TELEGRAM_ALLOWED_USER_ID?.trim() ?? "");
   if (!token) {
@@ -31,8 +35,10 @@ async function main(): Promise<void> {
     throw new Error("Missing TELEGRAM_ALLOWED_USER_ID in config.env");
   }
 
+  const lifecycle = resolveTelegramApprovalSmokeLifecycle(smokeEnv);
   const host = createPhalanxHost({
-    configValues: runtimeEnv,
+    lifecycle,
+    configValues: smokeEnv,
     approvalNotifyTimeoutMs: Number(process.env.PHALANX_APPROVAL_NOTIFY_TIMEOUT_MS ?? "8000"),
   });
   const bot = new Bot(token);
@@ -186,4 +192,32 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+export function resolveTelegramApprovalSmokeLifecycle(
+  runtimeEnv: Readonly<Record<string, string | undefined>>,
+): RuntimeLifecycleState | undefined {
+  const cfg = buildRuntimeConfig(runtimeEnv);
+  return cfg.mode === "live" && cfg.readiness.operatorReady && cfg.telegram.allowedUserId ? "READY" : undefined;
+}
+
+function stripBlockedApprovalTarget(raw: string | undefined): string {
+  const filtered =
+    raw
+      ?.split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0 && value !== "uniswap-v3")
+      .join(",") ?? "";
+  return mergePolicyItemTargets(filtered, ["whitelist-admin"]);
+}
+
+export function buildTelegramApprovalSmokeConfigValues(
+  runtimeEnv: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string | undefined>> {
+  return {
+    ...runtimeEnv,
+    WHITELIST_TARGETS: stripBlockedApprovalTarget(runtimeEnv.WHITELIST_TARGETS ?? runtimeEnv.PHALANX_WHITELIST_TARGETS),
+  };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

@@ -1,0 +1,28 @@
+---
+description: Keep external integration code structured and honest
+globs: src/adapters/**/*.ts
+alwaysApply: false
+---
+
+# Adapter Discipline
+
+Adapters may:
+- build external commands or requests
+- execute external calls
+- parse and normalize external outputs
+- return structured results
+
+Adapters may not:
+- make approval, lifecycle, whitelist, or governance decisions
+- silently substitute product-critical targets such as `uniswap-v3` or `pancakeswap-v3`
+- hide business invariants inside parsers
+
+Prefer separating:
+- command building
+- execution
+- parsing
+- normalization
+
+When a protocol needs special handling, extract a focused module instead of growing a shared mega-adapter.
+
+External failure paths should stay structured, using explicit result states such as `completed`, `failed`, `tool_missing`, or `degraded` rather than opaque throws.

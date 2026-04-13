@@ -5,6 +5,10 @@ import type { TelegramReportNotifier } from "../app/host.js";
 import type { RuntimeEvent } from "../runtime/events.js";
 import { describeRuntimeAction } from "../runtime/action-labels.js";
 import type { TelegramApprovalNotifier, TelegramApprovalNotifierResult } from "../mcp/server.js";
+import { buildOperatorFallbackReply } from "./fallback.js";
+import { formatOperatorQueryPayload } from "./operator-formatters.js";
+import { runOperatorQuery } from "./operator-queries.js";
+import { classifyOperatorTelegramText } from "./operator-router.js";
 
 type SendMessageExtra = {
   reply_markup?: unknown;
@@ -54,7 +58,46 @@ export function createTelegramApprovalNotifier(
   };
 }
 
+function appendDemoRunLines(lines: string[], event: RuntimeEvent): void {
+  const d = event.demoRun;
+  if (!d) {
+    return;
+  }
+  lines.push("", "Demo context:");
+  lines.push(`• OmRate path: ${d.omRatePath} (${d.chain} ${d.tokenA}/${d.tokenB})`);
+  if (d.selectedPool?.pairLabel || d.selectedPool?.pairAddress) {
+    lines.push(
+      `• Pool: ${d.selectedPool.pairLabel ?? "n/a"}${d.selectedPool.pairAddress ? ` @ ${d.selectedPool.pairAddress}` : ""}`,
+    );
+  }
+  lines.push(`• Swap prep: ${d.swapPreparation.status} — ${d.swapPreparation.summary}`);
+  lines.push(
+    `• LP lane: ${d.lpExecution.action ?? "n/a"} @ ${d.lpExecution.target ?? "n/a"} (ready: ${d.lpExecution.ready ? "yes" : "no"})`,
+  );
+  if (d.pendingApproval?.approvalId) {
+    lines.push(`• Pending approval: ${d.pendingApproval.approvalId}`);
+  }
+}
+
 function renderRuntimeExecutionReport(event: RuntimeEvent): string {
+  if (event.stage === "guardian_detected" && event.entrySource === "guardian") {
+    const lines = [
+      "Rebalance proposal",
+      "",
+      `Action: ${event.action}`,
+      `Intent: ${event.intentId}`,
+      `Correlation: ${event.correlationId}`,
+      `Summary: ${event.summary}`,
+    ];
+    if (event.reason) {
+      lines.push(`Reason: ${event.reason}`);
+    }
+    if (event.riskNotes && event.riskNotes.length > 0) {
+      lines.push(`Context: ${event.riskNotes.join(" | ")}`);
+    }
+    appendDemoRunLines(lines, event);
+    return lines.join("\n");
+  }
   const lines = [
     event.stage === "executed" ? "Execution report" : "Execution alert",
     "",
@@ -73,6 +116,7 @@ function renderRuntimeExecutionReport(event: RuntimeEvent): string {
   if (event.txRefs && event.txRefs.length > 0) {
     lines.push(`Tx: ${event.txRefs.join(", ")}`);
   }
+  appendDemoRunLines(lines, event);
   return lines.join("\n");
 }
 
@@ -124,6 +168,38 @@ export function registerTelegramBotHandlers(bot: GrammyLikeBot, host: PhalanxHos
 
     for (const message of result.messages) {
       await ctx.reply(message);
+    }
+
+    if (result.messages.length > 0) {
+      return;
+    }
+
+    const session = host.getSetupSession();
+    if (session.lifecycle !== "READY" || ctx.chat?.type !== "private") {
+      return;
+    }
+
+    const rawText = ctx.message?.text ?? "";
+    const trimmed = rawText.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+
+    const operatorId = session.ownerUserId;
+    const fromId = ctx.from?.id;
+    if (!operatorId || fromId === undefined || String(fromId) !== operatorId) {
+      return;
+    }
+
+    const route = classifyOperatorTelegramText(trimmed);
+    if (route.kind === "fallback") {
+      await ctx.reply(buildOperatorFallbackReply());
+      return;
+    }
+
+    const payload = await runOperatorQuery(host, route.family);
+    for (const chunk of formatOperatorQueryPayload(payload)) {
+      await ctx.reply(chunk);
     }
   });
 

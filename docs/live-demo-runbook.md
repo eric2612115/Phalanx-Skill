@@ -1,27 +1,45 @@
 # Live Demo Runbook
 
-This runbook verifies the current Phalanx live-capable runtime on a single machine.
+This runbook verifies the current installable Phalanx operator package on a single machine.
 
-## 1. Prepare `config.env`
+## 1. Install And Bootstrap
 
-Minimum fields for real live mode:
+```bash
+git clone <your-copy-of-this-repo>
+cd Phalanx-Skill
+npm install
+npm run init
+```
+
+Expected init behavior:
+
+- creates `config.env` from `config.env.example` when missing
+- reports `operator_ready`, `demo_ready`, or partial readiness
+- separates operator-tier missing values from optional values
+- treats `OMRATE_API_KEY` as optional because x402 is the baseline once the agent wallet is ready
+- tells the operator to privately message the bot and run `/claim`
+
+## 2. Prepare `config.env`
+
+Operator-ready minimum fields for real live mode:
 
 - `PHALANX_RUNTIME_MODE=live`
 - `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ALLOWED_USER_ID`
 - `OKX_API_KEY`
 - `OKX_API_SECRET`
 - `OKX_API_PASSPHRASE`
-- `OMRATE_API_KEY`
-- `OMRATE_API_BASE_URL`
-- `XLAYER_RPC_URL`
+- `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS`
+
+Demo-ready additions:
+
 - `POLICY_OWNER_KEY`
 - `WHITELIST_POLICY_ADDRESS`
 - `PHALANX_OWNER_EVM_ADDRESS`
-- `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS`
+- `BASE_RPC_URL`
 
 Optional:
 
+- `OMRATE_API_KEY`
 - `PHALANX_ENABLE_MCP_STDIO=1`
 - `PHALANX_GUARDIAN_ENABLED=1`
 - `PHALANX_GUARDIAN_INTERVAL_MS=60000`
@@ -30,9 +48,17 @@ Optional:
 - `PHALANX_BASE_GAS_RESERVE_WEI`
 - `PHALANX_XLAYER_GAS_RESERVE_WEI`
 
+Fixed / auto-persisted behavior:
+
+- `TELEGRAM_ALLOWED_USER_ID` is written automatically after the first successful private `/claim`
+- `OMRATE_API_BASE_URL` defaults to `https://api.omrate.com`
+- `XLAYER_RPC_URL` defaults to `https://rpc.xlayer.tech`
+
 `TEST_WALLET_ADDRESS` is now a dry-run / synthetic fallback only. Real live execution should point at the current OKX Agentic Wallet via `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS`.
 
-## 2. Re-run installer review before host-side third-party use
+For the main demo lane, treat LP decision data as runtime discovery, not operator prefill. `PHALANX_LP_*` values below belong to the dedicated roundtrip proof script, not to the Guardian/x402/planner mainline.
+
+## 3. Re-run installer review before host-side third-party use
 
 ```bash
 npm run review:docker:all
@@ -43,7 +69,7 @@ Compare against:
 - `docs/third-party-install-review.md`
 - `docs/third-party-review-baseline.md`
 
-## 3. Run startup smoke
+## 4. Run startup smoke
 
 ```bash
 npm run smoke:live
@@ -52,10 +78,10 @@ npm run smoke:live
 Expected:
 
 - startup summary prints `mode`
-- readiness shows missing fields or `liveReady: true`
+- readiness shows `operatorReady` / `demoReady` aligned state
 - `phalanx_status` path returns successfully
 
-## 3.5 Fund the Agentic Wallet before real execution
+## 4.5 Fund the Agentic Wallet before real execution
 
 Before any real live execution:
 
@@ -63,7 +89,7 @@ Before any real live execution:
 2. confirm the active wallet and balances with `onchainos wallet balance`
 3. only then continue to LP / x402 / owner-withdraw live checks
 
-## 4. Verify orchestration path without real funds
+## 5. Verify orchestration path without real funds
 
 ```bash
 PHALANX_SMOKE_SYNTHETIC_READY=1 npm run smoke:live
@@ -72,15 +98,16 @@ PHALANX_SMOKE_SYNTHETIC_READY=1 npm run smoke:live
 Expected:
 
 - portfolio path executes
+- Guardian demo mode can emit a proactive proposal-style Telegram report before approval/execution
 - `phalanx_uniswap_liquidity_plan` returns planner evidence plus `runtimeDownstream.executionAction=depositLpPosition`
-- blocked `depositLpPosition` on `uniswap-v3` returns `pending_approval`
-- approval callback data is generated
-- callback resumes the LP execution lane through `RuntimeCore`
+- smoke output includes an LP observer/validator view of planner downstream readiness instead of backfilling `PHALANX_LP_*`
+- blocked `depositLpPosition` on `uniswap-v3` returns `pending_approval` only when the planner downstream is already execution-ready
+- when approval is requested, callback resumes the LP execution lane through `RuntimeCore`
 - `withdrawToOwner` also returns `pending_approval` and resumes after callback
 - smoke output includes `skillReadiness` for `onchainos`, `Uniswap liquidity-planner` discovery/plan, and `uniswapPlannerExecution` (official `SKILL.md` load + validation when `PHALANX_UNISWAP_SKILL_ROOT` points at an installed `Uniswap/uniswap-ai` tree)
 - smoke output also includes a `pancakeswapOnchainos` capability probe so Pancake LP support can be assessed without changing the main demo line
 
-## 5. Start runtime host
+## 6. Start runtime host
 
 Without MCP stdio:
 
@@ -98,7 +125,7 @@ Note: when MCP stdio is enabled, startup output is written to `stderr` to avoid 
 
 `PHALANX_GUARDIAN_ENABLED` is read from the merged runtime config, so setting it in `config.env` is sufficient.
 
-## 6. Real Telegram verification
+## 7. Real Telegram verification
 
 When `TELEGRAM_BOT_TOKEN` is valid and `PHALANX_RUNTIME_MODE=live`:
 
@@ -106,8 +133,16 @@ When `TELEGRAM_BOT_TOKEN` is valid and `PHALANX_RUNTIME_MODE=live`:
 2. send a private message to the bot
 3. complete owner claim if not already bound
 4. verify approval messages arrive in the same private chat
+5. verify these bounded operator questions work after `READY`:
+   - `status`
+   - `portfolio`
+   - `recent events`
+   - `why blocked`
+   - `current whitelist`
+   - `risk summary`
+   - `agent wallet`
 
-## 7. Real onchainos / OmRate / whitelist / LP verification
+## 8. Real onchainos / OmRate / whitelist / LP verification
 
 Run these incrementally with test wallets and small amounts already deposited into the Agentic Wallet:
 
@@ -121,7 +156,7 @@ Run these incrementally with test wallets and small amounts already deposited in
 8. owner withdraw path: `withdrawToOwner` or `sweepToOwner` -> Telegram approval -> callback resume
 9. only then attempt a tiny live execution
 
-### 7.1 Uniswap LP roundtrip checklist
+### 8.1 Uniswap LP roundtrip checklist
 
 Use the dedicated live roundtrip script when you want a replayable proof bundle:
 
@@ -129,7 +164,7 @@ Use the dedicated live roundtrip script when you want a replayable proof bundle:
 npm run smoke:uniswap-lp-roundtrip
 ```
 
-Required env before running:
+Required env before running the dedicated roundtrip script:
 
 - `PHALANX_LP_INVESTMENT_ID`
 - `PHALANX_LP_AMOUNT`
@@ -159,6 +194,12 @@ Interpretation rules:
 4. operator-supplied LP amounts must already be in minimal units
 5. live Uniswap V3 execution on Base now uses direct `NonfungiblePositionManager` calldata through `onchainos wallet contract-call`, not the default high-level `onchainos defi invest/withdraw` LP route
 
+For the broader product demo:
+
+1. pool choice should come from paid OmRate data plus planner output
+2. swap need should come from current wallet holdings vs selected LP shape
+3. `PHALANX_LP_*` should be considered override/debug inputs, not the primary demo control surface
+
 Judge-facing explanation:
 
 - reference note: `docs/uniswap-v3-direct-execution.md`
@@ -174,7 +215,7 @@ Expected evidence from the script:
 - withdraw action result and Telegram callback result
 - post-withdraw positions / position-detail output
 
-## 8. Productization gates before demo
+## 9. Productization gates before demo
 
 Confirm all of the following before recording or presenting:
 
@@ -189,7 +230,7 @@ Recommended verification command:
 npm test -- tests/execution-coordinator.test.ts tests/guardian-cycle.test.ts tests/mcp-approval-flow.test.ts tests/transport-live.test.ts tests/runtime-host.test.ts tests/adapter-contracts.test.ts
 ```
 
-## 9. Demo script
+## 10. Demo script
 
 For the short-term governance demo, prefer fixed policy items over raw address prompts:
 
@@ -268,7 +309,7 @@ Suggested setup:
 4. confirm callback resumes owner withdrawal directly, without any whitelist expansion
 5. confirm gas reserve remains on-chain after `sweepToOwner`
 
-## 10. Evidence checklist
+## 11. Evidence checklist
 
 Capture these artifacts during the demo rehearsal:
 
@@ -286,7 +327,7 @@ Capture these artifacts during the demo rehearsal:
 - proof that LP withdraw identifiers were refreshed from `onchainos positions` / `position-detail` rather than a stale local cache
 - proof that owner withdrawal uses direct approval rather than whitelist governance
 
-## 11. Validation gates
+## 12. Validation gates
 
 ### Short-term demo ready
 
@@ -305,7 +346,7 @@ Capture these artifacts during the demo rehearsal:
 - the agent can explain bundle meaning, risk, and pruning suggestions
 - adding bundle support does not require rewriting the current governance state machine
 
-## 12. Fallback paths
+## 13. Fallback paths
 
 Use these fallback modes when live dependencies are partially unavailable:
 

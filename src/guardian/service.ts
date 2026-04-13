@@ -108,6 +108,8 @@ export async function loadGuardianPortfolioFromOnchainos(
 
 /**
  * Opt-in background Guardian tick (env-gated). Safe no-op when disabled.
+ * When a {@link PhalanxHost} is supplied, each cycle updates structured assessment on the host
+ * (see `guardian/operator-assessment.ts`) for operator queries — not parsed from Telegram text.
  */
 export function maybeStartGuardianFromEnv(
   host?: PhalanxHost,

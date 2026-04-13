@@ -1,0 +1,27 @@
+---
+description: Hard boundaries for Phalanx runtime layers
+alwaysApply: true
+---
+
+# Architecture Guardrails
+
+Always keep responsibilities separated:
+- `src/app/host.ts` wires transports, config, and runtime services. It must not become a domain-logic hub.
+- `src/runtime/**` owns intent flow, approvals, and pipeline state. It must not depend on Telegram, CLI, or HTTP transport details.
+- `src/executors/**` route actions to execution backends. They should not absorb policy or transport orchestration.
+- `src/adapters/**` translate external systems. They must not own approval, lifecycle, whitelist, or governance policy.
+
+Before editing, answer:
+- Which layer am I changing?
+- Does this logic belong in that layer, or should it be a new module?
+- Am I leaking policy into transport or integration code?
+
+Never:
+- Add business branching directly to `src/app/host.ts` when a runtime, executor, or adapter module is the real home.
+- Bypass `src/runtime/intents.ts` for new action names.
+- Hide approval or whitelist decisions inside adapters.
+
+If a new state-changing action is added, update:
+- `src/runtime/intents.ts`
+- the relevant policy/risk/executor path
+- focused tests for the new action flow

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "phalanx-skill": {
+      "command": "npm",
+      "args": ["run", "dev"],
+      "cwd": ".",
+      "env": {
+        "PHALANX_ENABLE_MCP_STDIO": "1",
+        "PHALANX_DRY_RUN_KEEPALIVE": "1",
+        "PHALANX_CONFIG_PATH": "./config.env"
+      }
+    }
+  }
+}

@@ -8,6 +8,16 @@ alwaysApply: true
 `Phalanx-Skill` is the **active** action-plane repo for wallet execution, signing, x402-related flows, and orchestration against OmRate backend APIs.
 
 Always read `repo-scope.mdc` before making changes here.
-Read `operational-checks.mdc` for local checks, env changes, or integration-doc updates.
+Always read `architecture-guardrails.mdc` before changing code structure, action flow, or cross-layer behavior.
+Always read `file-size-and-splitting.mdc` before expanding an already-heavy file or adding a new code path.
+Always read `test-and-doc-gates.mdc` before claiming runtime or env-related work is done.
+Read `adapter-discipline.mdc` when touching `src/adapters/**` or adding protocol-specific integrations.
+Read `change-budget.mdc` when a task touches multiple subsystems or risks "while I'm here" sprawl.
+Read `operational-checks.mdc` for required verification, env changes, or integration-doc updates.
+
+Default stance in this repo:
+- Keep `src/app/host.ts` as a composition root, not a business-logic landing zone.
+- Do not keep growing large adapters until you have considered extraction.
+- If a change crosses `runtime` + `host` + `adapters`, stop and plan first.
 
 If work here changes cross-repo trust boundaries or ownership, update the shared root rules too.

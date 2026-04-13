@@ -50,6 +50,10 @@ const DEFAULT_RULES: readonly RiskRule[] = [
 export class RiskEngine {
   constructor(private readonly rules: readonly RiskRule[] = DEFAULT_RULES) {}
 
+  getRuleOrder(): readonly string[] {
+    return this.rules.map((rule) => rule.name);
+  }
+
   evaluate(intent: RuntimeIntent, ctx: RiskEvaluationContext): RiskEngineResult {
     for (const rule of this.rules) {
       const r = rule.evaluate(intent, ctx);
@@ -65,3 +69,6 @@ export class RiskEngine {
     return { ok: true };
   }
 }
+
+/** Observability: fixed rule evaluation order (no behavior change). */
+export const RISK_ENGINE_RULE_ORDER: readonly string[] = DEFAULT_RULES.map((rule) => rule.name);

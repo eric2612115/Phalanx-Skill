@@ -86,31 +86,35 @@ describe("ConfigStore", () => {
     expect(summary.missing).toContain("OKX_API_KEY");
   });
 
-  it("does not require chain policy keys in default live mode", () => {
+  it("treats governance and owner execution keys as demo-only in live mode", () => {
     const summary = summarizeRuntimeReadiness({
       PHALANX_RUNTIME_MODE: "live",
       TELEGRAM_BOT_TOKEN: "token",
       OKX_API_KEY: "okx-key",
       OKX_API_SECRET: "okx-secret",
       OKX_API_PASSPHRASE: "okx-pass",
+      AGENT_WALLET_ADDRESS: "0x1111111111111111111111111111111111111111",
       OMRATE_API_KEY: "omrate-key",
       OMRATE_API_BASE_URL: "https://omrate.io/api",
       XLAYER_RPC_URL: "https://rpc.example",
     });
 
-    expect(summary.liveReady).toBe(true);
-    expect(summary.missing).not.toContain("POLICY_OWNER_KEY");
-    expect(summary.missing).not.toContain("WHITELIST_POLICY_ADDRESS");
+    expect(summary.operatorReady).toBe(true);
+    expect(summary.demoReady).toBe(false);
+    expect(summary.operatorMissing).not.toContain("POLICY_OWNER_KEY");
+    expect(summary.operatorMissing).not.toContain("WHITELIST_POLICY_ADDRESS");
+    expect(summary.demoMissing).toContain("POLICY_OWNER_KEY");
+    expect(summary.demoMissing).toContain("WHITELIST_POLICY_ADDRESS");
   });
 
-  it("requires chain policy keys when advanced policy mode is enabled", () => {
+  it("reports all demo-only missing keys under the current live readiness contract", () => {
     const summary = summarizeRuntimeReadiness({
       PHALANX_RUNTIME_MODE: "live",
-      PHALANX_REQUIRE_CHAIN_POLICY: "1",
       TELEGRAM_BOT_TOKEN: "token",
       OKX_API_KEY: "okx-key",
       OKX_API_SECRET: "okx-secret",
       OKX_API_PASSPHRASE: "okx-pass",
+      AGENT_WALLET_ADDRESS: "0x1111111111111111111111111111111111111111",
       OMRATE_API_KEY: "omrate-key",
       OMRATE_API_BASE_URL: "https://omrate.io/api",
       XLAYER_RPC_URL: "https://rpc.example",
@@ -119,6 +123,8 @@ describe("ConfigStore", () => {
     expect(summary.liveReady).toBe(false);
     expect(summary.missing).toContain("POLICY_OWNER_KEY");
     expect(summary.missing).toContain("WHITELIST_POLICY_ADDRESS");
+    expect(summary.missing).toContain("PHALANX_OWNER_EVM_ADDRESS");
+    expect(summary.missing).toContain("BASE_RPC_URL");
   });
 
   it("buildRuntimeConfig masks secrets in readiness summary", () => {
@@ -129,17 +135,21 @@ describe("ConfigStore", () => {
       OKX_API_KEY: "okx-key",
       OKX_API_SECRET: "okx-secret",
       OKX_API_PASSPHRASE: "okx-pass",
+      AGENT_WALLET_ADDRESS: "0x1111111111111111111111111111111111111111",
       OMRATE_API_KEY: "omrate-key",
       OMRATE_API_BASE_URL: "https://omrate.io/api",
       XLAYER_RPC_URL: "https://rpc.example",
       POLICY_OWNER_KEY: "0xabc",
       WHITELIST_POLICY_ADDRESS: "0x123",
+      PHALANX_OWNER_EVM_ADDRESS: "0x4444444444444444444444444444444444444444",
+      BASE_RPC_URL: "https://base.example",
     });
 
     expect(config.readiness.liveReady).toBe(true);
     expect(config.readiness.masked.TELEGRAM_BOT_TOKEN).not.toContain("telegram-secret-token");
     expect(config.readiness.masked.OKX_API_SECRET).not.toContain("okx-secret");
     expect(config.telegram.allowedUserId).toBe("42");
+    expect(config.owner.evmAddress).toBe("0x4444444444444444444444444444444444444444");
     expect(config.mode).toBe("live");
   });
 
@@ -165,6 +175,7 @@ describe("ConfigStore", () => {
       OKX_WEB3_API_KEY: "okx-web3-key",
       OKX_WEB3_API_SECRET: "okx-web3-secret",
       OKX_WEB3_API_PASSPHRASE: "okx-web3-pass",
+      AGENT_WALLET_ADDRESS: "0x1111111111111111111111111111111111111111",
       OMRATE_X402_API_BASE: "https://web3.okx.com",
       RPC_8453: "https://base.example",
       OMRATE_X402_BUYER_WALLET_ADDRESS: "0x1111111111111111111111111111111111111111",
@@ -176,6 +187,33 @@ describe("ConfigStore", () => {
     expect(config.omrate.baseUrl).toBe("https://web3.okx.com");
     expect(config.chain.baseRpcUrl).toBe("https://base.example");
     expect(config.wallet.testAddress).toBe("0x1111111111111111111111111111111111111111");
+  });
+
+  it("buildRuntimeConfig can derive OmRate base URL from backend public URL when OmRate-specific keys are absent", () => {
+    const config = buildRuntimeConfig({
+      PHALANX_RUNTIME_MODE: "live",
+      TELEGRAM_BOT_TOKEN: "token",
+      OKX_API_KEY: "okx-key",
+      OKX_API_SECRET: "okx-secret",
+      OKX_API_PASSPHRASE: "okx-pass",
+      AGENT_WALLET_ADDRESS: "0x1111111111111111111111111111111111111111",
+      AUTH_BACKEND_PUBLIC_URL: "http://127.0.0.1:8000",
+    });
+
+    expect(config.omrate.baseUrl).toBe("http://127.0.0.1:8000");
+  });
+
+  it("requires an execution wallet signal for operatorReady in live mode", () => {
+    const summary = summarizeRuntimeReadiness({
+      PHALANX_RUNTIME_MODE: "live",
+      TELEGRAM_BOT_TOKEN: "token",
+      OKX_API_KEY: "okx-key",
+      OKX_API_SECRET: "okx-secret",
+      OKX_API_PASSPHRASE: "okx-pass",
+    });
+
+    expect(summary.operatorReady).toBe(false);
+    expect(summary.operatorMissing).toContain("EXECUTION_WALLET_SIGNAL");
   });
 });
 

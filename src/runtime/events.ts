@@ -1,3 +1,4 @@
+import type { RebalanceDemoRunMetadata } from "../demo/rebalance-flow.js";
 import type { RuntimeIntent } from "./types.js";
 
 export type RuntimeEventStage =
@@ -23,6 +24,8 @@ export interface RuntimeEvent {
   readonly riskNotes?: readonly string[];
   readonly txRefs?: readonly string[];
   readonly approvalId?: string;
+  /** Structured OmRate + Uniswap demo context when the event belongs to the agentic rebalance demo path. */
+  readonly demoRun?: RebalanceDemoRunMetadata;
 }
 
 function stringField(payload: Readonly<Record<string, unknown>>, key: string): string | undefined {
@@ -45,7 +48,9 @@ function stringArrayField(payload: Readonly<Record<string, unknown>>, key: strin
 export function buildRuntimeEvent(
   intent: RuntimeIntent,
   stage: RuntimeEventStage,
-  extra: Partial<Omit<RuntimeEvent, "eventId" | "createdAt" | "correlationId" | "intentId" | "action" | "entrySource" | "target" | "stage">> = {},
+  extra: Partial<
+    Omit<RuntimeEvent, "eventId" | "createdAt" | "correlationId" | "intentId" | "action" | "entrySource" | "target" | "stage">
+  > = {},
 ): RuntimeEvent {
   const payload = intent.payload;
   const defaultReason = stringField(payload, "reason");
@@ -64,6 +69,7 @@ export function buildRuntimeEvent(
     riskNotes: extra.riskNotes ?? riskNotes,
     txRefs: extra.txRefs,
     approvalId: extra.approvalId,
+    demoRun: extra.demoRun,
   };
 }
 

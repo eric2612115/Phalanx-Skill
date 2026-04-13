@@ -247,6 +247,22 @@ describe("omrate adapter (contract)", () => {
     expect(ok.apiKeyConfigured).toBe(true);
   });
 
+  it("uses backend public URL as OmRate base fallback when OmRate-specific base env is absent", () => {
+    const summary = summarizeOmRateAdapterEnv({
+      AUTH_BACKEND_PUBLIC_URL: "http://127.0.0.1:8000/",
+    });
+    expect(summary.baseConfigured).toBe(true);
+    expect(summary.baseUrlEnv).toBe("AUTH_BACKEND_PUBLIC_URL");
+
+    const plan = planOmRateQuery(
+      { path: "/health", method: "GET" },
+      { AUTH_BACKEND_PUBLIC_URL: "http://127.0.0.1:8000/" },
+    );
+    expect(plan.status).toBe("planned");
+    expect(plan.request.resolvedBase).toBe("http://127.0.0.1:8000");
+    expect(plan.request.baseUrlEnv).toBe("AUTH_BACKEND_PUBLIC_URL");
+  });
+
   it("probeOmRateHttp skips when base URL is absent", async () => {
     const r = await probeOmRateHttp({ path: "/health" }, {});
     expect(r.provider).toBe("omrate");

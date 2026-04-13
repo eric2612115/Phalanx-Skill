@@ -1,0 +1,29 @@
+---
+description: Require verification and docs for behavior changes
+alwaysApply: true
+---
+
+# Test And Doc Gates
+
+Always run `npm run test` after meaningful behavior changes before claiming the work is done.
+Run `npm run guard:ai` after boundary-sensitive or multi-layer changes.
+
+Run `npm run build` when touching:
+- TypeScript config
+- exports
+- startup wiring
+- config or env loading
+
+Always update `README.md`, runbooks, or rules when changing:
+- required env vars
+- runtime behavior
+- operator workflow
+- mandatory tooling or fallback semantics
+
+Add or update focused tests when changing:
+- action flow
+- approval flow
+- adapter branches
+- runtime gating behavior
+
+If you cannot run required verification, say exactly what was not run and why.

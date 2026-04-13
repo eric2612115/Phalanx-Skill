@@ -1,0 +1,23 @@
+---
+description: Prevent god files and unbounded growth
+alwaysApply: true
+---
+
+# File Size And Splitting
+
+Before expanding a file that is already heavy, decide whether the change belongs in:
+- a new helper or parser module
+- a protocol-specific module
+- a command-builder module
+- a wiring/composition layer
+
+Always prefer extraction when a change adds a new responsibility, not just a small fix.
+
+Allowed exception:
+- Small, local bug fixes may stay in place when they do not add a new branch of responsibility.
+
+Never:
+- Use a feature task as an excuse to keep appending to a known mega-file.
+- Create a new file that mixes parsing, execution, retries, reporting, and domain decisions in one module.
+
+When editing a large file such as `src/app/host.ts`, `src/adapters/onchainos.ts`, or `src/adapters/lp-execution.ts`, explain why the file is still the right home or split it first.

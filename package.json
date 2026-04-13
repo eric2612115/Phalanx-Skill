@@ -1,12 +1,18 @@
 {
   "name": "phalanx-skill",
+  "description": "Phalanx action-plane runtime for wallet execution, signing, x402 flows, and OmRate orchestration.",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc",
+    "init": "tsx scripts/init-operator.ts",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
+    "guard:ai": "node scripts/ai-governance-guard.mjs",
     "smoke:live": "tsx scripts/live-smoke.ts",
     "smoke:uniswap-lp-roundtrip": "tsx scripts/uniswap-lp-live-roundtrip.ts",
     "smoke:morpho": "tsx scripts/morpho-live-smoke.ts",

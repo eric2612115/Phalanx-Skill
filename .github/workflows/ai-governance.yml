@@ -1,0 +1,37 @@
+name: AI Governance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  guard-ai:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve diff base
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.base_ref }}" --depth=1
+            echo "DIFF_BASE=origin/${{ github.base_ref }}" >> "$GITHUB_ENV"
+          else
+            git fetch origin main --depth=1
+            echo "DIFF_BASE=origin/main" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run AI governance guard
+        run: npm run guard:ai -- --diff-base "$DIFF_BASE"

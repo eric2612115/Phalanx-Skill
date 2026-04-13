@@ -22,7 +22,7 @@ export type OmRateQueryPlan = {
     note: string;
   };
   request: {
-    baseUrlEnv: "OMRATE_API_BASE" | "OMRATE_API_BASE_URL";
+    baseUrlEnv: "OMRATE_API_BASE" | "OMRATE_API_BASE_URL" | "AUTH_BACKEND_PUBLIC_URL";
     resolvedBase?: string;
     path: string;
     method: string;
@@ -48,11 +48,15 @@ export type OmRateAdapterEnvSummary = {
   readonly summary: string;
 };
 
-function resolveOmrateBase(env: NodeJS.ProcessEnv): { base: string; baseUrlEnv: OmRateQueryPlan["request"]["baseUrlEnv"] } | null {
+function resolveOmrateBase(
+  env: NodeJS.ProcessEnv,
+): { base: string; baseUrlEnv: OmRateQueryPlan["request"]["baseUrlEnv"] } | null {
   const a = (env.OMRATE_API_BASE_URL ?? "").trim();
   if (a) return { base: a.replace(/\/$/, ""), baseUrlEnv: "OMRATE_API_BASE_URL" };
   const b = (env.OMRATE_API_BASE ?? "").trim();
   if (b) return { base: b.replace(/\/$/, ""), baseUrlEnv: "OMRATE_API_BASE" };
+  const c = (env.AUTH_BACKEND_PUBLIC_URL ?? "").trim();
+  if (c) return { base: c.replace(/\/$/, ""), baseUrlEnv: "AUTH_BACKEND_PUBLIC_URL" };
   return null;
 }
 
@@ -65,7 +69,7 @@ export function summarizeOmRateAdapterEnv(env: NodeJS.ProcessEnv = process.env):
       baseConfigured: false,
       apiKeyConfigured,
       summary:
-        "OmRate API base is not configured; set OMRATE_API_BASE_URL or OMRATE_API_BASE for live HTTP paths.",
+        "OmRate API base is not configured; set OMRATE_API_BASE_URL, OMRATE_API_BASE, or AUTH_BACKEND_PUBLIC_URL for live HTTP paths.",
     };
   }
   return {
@@ -150,7 +154,7 @@ export function planOmRateQuery(
       provider: "omrate",
       status: "tool_missing",
       summary:
-        "OMRATE_API_BASE_URL or OMRATE_API_BASE is not set; configure OmRate API base before live queries.",
+        "OMRATE_API_BASE_URL, OMRATE_API_BASE, or AUTH_BACKEND_PUBLIC_URL is not set; configure OmRate API base before live queries.",
       x402: {
         required: Boolean(input.x402Aware),
         note: input.x402Aware

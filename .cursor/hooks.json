@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/phalanx-session-start.mjs",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/phalanx-stop-guard.mjs",
+        "timeout": 10,
+        "loop_limit": 2
+      }
+    ]
+  }
+}

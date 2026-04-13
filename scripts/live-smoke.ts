@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 
 import { createPhalanxHost } from "../src/app/host.js";
 import { listOnchainosCapabilities } from "../src/adapters/onchainos.js";
+import { buildLpExecutionObserver } from "../src/demo/observer.js";
 import {
   discoverUniswapPlannerSkill,
   executeUniswapLiquidityPlannerInvocation,
@@ -25,6 +26,7 @@ type SmokeOutput = {
   };
   /** Runtime MCP path: policy + executor; includes officialInvocation/dataPlane/runtimeDownstream when successful. */
   uniswapLiquidityPlanMcp?: unknown;
+  lpObserver?: unknown;
   statusTool: unknown;
   portfolioTool?: unknown;
   blockedLpActionTool?: unknown;
@@ -74,32 +76,6 @@ function extractPlannerPayloadTemplate(
     return undefined;
   }
   return { target, action, payloadTemplate };
-}
-
-function buildSyntheticLpExecutionPayload(payloadTemplate: Record<string, unknown>): Record<string, unknown> {
-  return {
-    ...payloadTemplate,
-    investmentId:
-      typeof payloadTemplate.investmentId === "string" && payloadTemplate.investmentId.length > 0
-        ? payloadTemplate.investmentId
-        : process.env.PHALANX_LP_INVESTMENT_ID ?? "uniswap-base-weth-usdc-v3",
-    amount:
-      typeof payloadTemplate.amount === "string" && payloadTemplate.amount.length > 0
-        ? payloadTemplate.amount
-        : process.env.PHALANX_LP_AMOUNT ?? "1000000",
-    amountSecondary:
-      typeof payloadTemplate.amountSecondary === "string" && payloadTemplate.amountSecondary.length > 0
-        ? payloadTemplate.amountSecondary
-        : process.env.PHALANX_LP_AMOUNT_SECONDARY ?? "500000000000000",
-    tokenSecondary:
-      typeof payloadTemplate.tokenSecondary === "string" && payloadTemplate.tokenSecondary.length > 0
-        ? payloadTemplate.tokenSecondary
-        : process.env.PHALANX_LP_TOKEN_SECONDARY ?? "ETH",
-    range:
-      typeof payloadTemplate.range === "string" && payloadTemplate.range.length > 0
-        ? payloadTemplate.range
-        : process.env.PHALANX_LP_RANGE ?? "5",
-  };
 }
 
 async function main(): Promise<void> {
@@ -179,9 +155,19 @@ async function main(): Promise<void> {
       tokenB: "ETH",
       positionType: "v3",
     });
+    const plannerResult =
+      output.uniswapLiquidityPlanMcp &&
+      typeof output.uniswapLiquidityPlanMcp === "object" &&
+      "ok" in output.uniswapLiquidityPlanMcp &&
+      (output.uniswapLiquidityPlanMcp as { ok?: boolean; data?: { adapterResult?: unknown } }).ok
+        ? ((output.uniswapLiquidityPlanMcp as { data?: { adapterResult?: unknown } }).data?.adapterResult as
+            | Parameters<typeof buildLpExecutionObserver>[0]
+            | undefined)
+        : undefined;
+    output.lpObserver = plannerResult ? buildLpExecutionObserver(plannerResult) : undefined;
     const plannerHandoff = extractPlannerPayloadTemplate(output.uniswapLiquidityPlanMcp);
-    if (plannerHandoff) {
-      const lpPayload = buildSyntheticLpExecutionPayload(plannerHandoff.payloadTemplate);
+    if (plannerHandoff && output.lpObserver && output.lpObserver.readyForExecution) {
+      const lpPayload = { ...output.lpObserver.payload };
       output.blockedLpActionTool = await syntheticHost.invokeMcp("phalanx_action", {
         action: plannerHandoff.action,
         payload: lpPayload,

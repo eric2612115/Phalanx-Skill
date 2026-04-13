@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildPortfolioSnapshot } from "../src/adapters/portfolio.ts";
 import { runGuardianCycle } from "../src/guardian/cycle.ts";
 
@@ -83,6 +83,9 @@ describe("runtime host integration", () => {
         XLAYER_RPC_URL: "https://rpc.example",
         POLICY_OWNER_KEY: "0xabc",
         WHITELIST_POLICY_ADDRESS: "0x123",
+        PHALANX_OWNER_EVM_ADDRESS: "0xowner",
+        BASE_RPC_URL: "https://base.rpc",
+        TEST_WALLET_ADDRESS: "0xwallet000000000000000000000000000000000001",
       },
     });
 
@@ -90,6 +93,18 @@ describe("runtime host integration", () => {
     expect(summary.mode).toBe("live");
     expect(summary.config.liveReady).toBe(true);
     expect(summary.config.masked.TELEGRAM_BOT_TOKEN).not.toContain("telegram-secret-token");
+  });
+
+  it("derives guardian surface status from config values when explicit option is omitted", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const host = createPhalanxHost({
+      configValues: {
+        PHALANX_GUARDIAN_ENABLED: "1",
+      },
+    });
+
+    expect(host.getStartupSummary().surfaces.guardian).toBe("enabled");
   });
 
   it("uses whitelist targets from config values when explicit host options are absent", async () => {
@@ -167,6 +182,9 @@ describe("runtime host integration", () => {
         XLAYER_RPC_URL: "https://rpc.example",
         POLICY_OWNER_KEY: "0xabc",
         WHITELIST_POLICY_ADDRESS: "0x123",
+        PHALANX_OWNER_EVM_ADDRESS: "0xowner",
+        BASE_RPC_URL: "https://base.rpc",
+        TEST_WALLET_ADDRESS: "0xwallet000000000000000000000000000000000001",
       },
     });
 
@@ -366,12 +384,440 @@ describe("runtime host integration", () => {
 
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]?.type).toBe("executed");
-    expect(reports).toEqual(["executed:executeRebalance:0xrebalance"]);
+    expect(reports).toEqual([
+      "guardian_detected:executeRebalance:",
+      "executed:executeRebalance:0xrebalance",
+    ]);
     expect(host.getRuntimeEvents().map((event) => event.stage)).toEqual([
       "guardian_detected",
       "intent_received",
       "executed",
     ]);
+  });
+
+  it("demo mode emits a guardian proposal before queuing LP whitelist approval", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const reports: string[] = [];
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      whitelistTargets: ["whitelist-admin"],
+      agenticRebalanceDemo: {
+        enabled: true,
+        omRatePath: "/rebalance/opportunities",
+        chain: "base",
+        tokenA: "USDC",
+        tokenB: "ETH",
+      },
+      rebalanceDemoRunner: vi.fn(async () => ({
+        status: "ok",
+        omRate: {
+          provider: "omrate",
+          status: "completed",
+          summary: "http_ok:200",
+        },
+        omRateCandidates: [
+          {
+            chain: "base",
+            tokenA: "USDC",
+            tokenB: "ETH",
+            poolAddress: "0xpool000000000000000000000000000000000001",
+            score: 10,
+          },
+        ],
+        planner: {
+          provider: "uniswap",
+          lane: "liquidity_planner_skill",
+          status: "completed",
+          summary: "planner_ok",
+          runtimeDownstream: {
+            executionTarget: "uniswap-v3",
+            executionAction: "depositLpPosition",
+            positionCreateBaseUrl: "https://app.uniswap.org/positions/create",
+            topUniswapPools: [
+              {
+                pairAddress: "0xpool000000000000000000000000000000000001",
+                pairLabel: "USDC/ETH",
+                version: "v3",
+                dexId: "uniswap",
+              },
+            ],
+            plannerInput: {
+              chain: "base",
+              tokenA: "USDC",
+              tokenB: "ETH",
+              positionType: "v3",
+            },
+            payloadTemplate: {
+              protocol: "uniswap-v3",
+              chain: "base",
+              investmentId: "planner-investment-id",
+              token: "USDC",
+              tokenSecondary: "ETH",
+              amount: "1000000",
+              amountSecondary: "500000000000000",
+              range: "5",
+              positionType: "v3",
+              poolAddress: "0xpool000000000000000000000000000000000001",
+            },
+            missingExecutionFields: [],
+          },
+        },
+        selectedPool: {
+          pairAddress: "0xpool000000000000000000000000000000000001",
+          pairLabel: "USDC/ETH",
+          version: "v3",
+          dexId: "uniswap",
+        },
+        swapPreparation: {
+          kind: "swap_preparation",
+          status: "assets_match",
+          summary: "Wallet already aligned.",
+        },
+        lpDepositPayloadSeed: {
+          protocol: "uniswap-v3",
+          chain: "base",
+          investmentId: "planner-investment-id",
+          token: "USDC",
+          tokenSecondary: "ETH",
+          amount: "1000000",
+          amountSecondary: "500000000000000",
+          range: "5",
+          poolAddress: "0xpool000000000000000000000000000000000001",
+        },
+        summaries: {
+          omRate: "http_ok:200",
+          planner: "planner_ok",
+        },
+      })),
+      governanceWriteImpl: async () => ({
+        status: "completed",
+        summary: "whitelist_contract_write_confirmed",
+        txHash: "0xpolicy",
+      }),
+      executor: {
+        execute: async (intent) => ({
+          provider: "test",
+          action: intent.action,
+          txRefs: [`0x${intent.action}`],
+          summary: `${intent.action} executed`,
+        }),
+      },
+    });
+    host.bindTelegramReportNotifier({
+      sendExecutionReport: async (event) => {
+        reports.push(`${event.stage}:${event.action}:${event.summary}`);
+      },
+    });
+
+    const cycle = runGuardianCycle({
+      now: 77,
+      driftThresholdBps: 500,
+      portfolio: buildPortfolioSnapshot(
+        [
+          { kind: "lending", currentBps: 8_000, targetBps: 5_000 },
+          { kind: "lp", currentBps: 2_000, targetBps: 5_000 },
+        ],
+        77,
+      ),
+    });
+
+    const outcomes = await host.handleGuardianCycleResult(cycle);
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.type).toBe("pending_approval");
+    expect(reports[0]).toContain("guardian_detected:proposeRebalance");
+    expect(reports[0]).toContain("USDC/ETH");
+    expect(host.getTelegramApprovalOutbox()).toHaveLength(1);
+
+    const latest = host.getLatestRebalanceDemoRunSummary();
+    expect(latest?.kind).toBe("rebalance_demo_v1");
+    expect(latest?.selectedPool?.pairLabel).toBe("USDC/ETH");
+    expect(latest?.lpExecution.ready).toBe(true);
+    expect(latest?.lpExecution.action).toBe("depositLpPosition");
+
+    const detected = host.getRuntimeEvents(20).find((e) => e.stage === "guardian_detected");
+    expect(detected?.demoRun?.swapPreparation.status).toBe("assets_match");
+    expect(detected?.demoRun?.selectedPool?.pairAddress).toBe(
+      "0xpool000000000000000000000000000000000001",
+    );
+
+    const awaiting = host.getRuntimeEvents(20).find((e) => e.stage === "awaiting_approval");
+    expect(awaiting?.demoRun?.pendingApproval?.approvalId).toBe(host.getTelegramApprovalOutbox()[0]?.approvalId);
+  });
+
+  it("demo mode preserves swap execution metadata before LP approval gating", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      whitelistTargets: ["pool", "whitelist-admin"],
+      agenticRebalanceDemo: {
+        enabled: true,
+        omRatePath: "/rebalance/opportunities",
+        chain: "base",
+        tokenA: "USDC",
+        tokenB: "ETH",
+      },
+      rebalanceDemoRunner: vi.fn(async () => ({
+        status: "ok",
+        omRate: {
+          provider: "omrate",
+          status: "completed",
+          summary: "http_ok:200",
+        },
+        omRateCandidates: [
+          {
+            chain: "base",
+            tokenA: "USDC",
+            tokenB: "ETH",
+            poolAddress: "0xpool000000000000000000000000000000000001",
+            score: 10,
+          },
+        ],
+        planner: {
+          provider: "uniswap",
+          lane: "liquidity_planner_skill",
+          status: "completed",
+          summary: "planner_ok",
+          runtimeDownstream: {
+            executionTarget: "uniswap-v3",
+            executionAction: "depositLpPosition",
+            positionCreateBaseUrl: "https://app.uniswap.org/positions/create",
+            topUniswapPools: [
+              {
+                pairAddress: "0xpool000000000000000000000000000000000001",
+                pairLabel: "USDC/ETH",
+                version: "v3",
+                dexId: "uniswap",
+              },
+            ],
+            plannerInput: {
+              chain: "base",
+              tokenA: "USDC",
+              tokenB: "ETH",
+              positionType: "v3",
+            },
+            payloadTemplate: {
+              protocol: "uniswap-v3",
+              chain: "base",
+              investmentId: "planner-investment-id",
+              token: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              tokenSecondary: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              amount: "1000000",
+              amountSecondary: "500000000000000",
+              range: "5",
+              positionType: "v3",
+              poolAddress: "0xpool000000000000000000000000000000000001",
+            },
+            missingExecutionFields: [],
+          },
+        },
+        selectedPool: {
+          pairAddress: "0xpool000000000000000000000000000000000001",
+          pairLabel: "USDC/ETH",
+          version: "v3",
+          dexId: "uniswap",
+        },
+        swapPreparation: {
+          kind: "swap_preparation",
+          status: "swap_recommended",
+          summary: "Wallet holdings are only partially aligned; recommend a preparatory swap before LP deposit.",
+          recommendedSwapIntent: {
+            action: "swap",
+            payload: {
+              chain: "base",
+              wallet: "0x1111111111111111111111111111111111111111",
+              fromTokenAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              toTokenAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              amount: "1000000",
+              slippage: "0.5",
+            },
+          },
+        },
+        lpDepositPayloadSeed: {
+          protocol: "uniswap-v3",
+          chain: "base",
+          investmentId: "planner-investment-id",
+          token: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          tokenSecondary: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          amount: "1000000",
+          amountSecondary: "500000000000000",
+          range: "5",
+          poolAddress: "0xpool000000000000000000000000000000000001",
+        },
+        summaries: {
+          omRate: "http_ok:200",
+          planner: "planner_ok",
+        },
+      })),
+      governanceWriteImpl: async () => ({
+        status: "completed",
+        summary: "whitelist_contract_write_confirmed",
+        txHash: "0xpolicy",
+      }),
+      executor: {
+        execute: async (intent) => ({
+          provider: "test",
+          action: intent.action,
+          txRefs: [`0x${intent.action}`],
+          summary: `${intent.action} executed`,
+        }),
+      },
+    });
+
+    const cycle = runGuardianCycle({
+      now: 79,
+      driftThresholdBps: 500,
+      portfolio: buildPortfolioSnapshot(
+        [
+          { kind: "lending", currentBps: 8_000, targetBps: 5_000 },
+          { kind: "lp", currentBps: 2_000, targetBps: 5_000 },
+        ],
+        79,
+      ),
+    });
+
+    const outcomes = await host.handleGuardianCycleResult(cycle);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.type).toBe("pending_approval");
+
+    const events = host.getRuntimeEvents(40);
+    const swapExecuted = events.find(
+      (e) => e.stage === "executed" && e.action === "swap" && e.entrySource === "mcp",
+    );
+    expect(swapExecuted?.txRefs).toEqual(["0xswap"]);
+    expect(swapExecuted?.demoRun?.swapPreparation.status).toBe("swap_recommended");
+    expect(swapExecuted?.demoRun?.selectedPool?.pairLabel).toBe("USDC/ETH");
+
+    const awaiting = events.find((e) => e.stage === "awaiting_approval");
+    expect(awaiting?.demoRun?.pendingApproval?.approvalId).toBe(host.getTelegramApprovalOutbox()[0]?.approvalId);
+  });
+
+  it("demo mode publishes a final guardian-style LP result after approval resume", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const reports: string[] = [];
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      whitelistTargets: ["whitelist-admin"],
+      agenticRebalanceDemo: {
+        enabled: true,
+        omRatePath: "/rebalance/opportunities",
+        chain: "base",
+        tokenA: "USDC",
+        tokenB: "ETH",
+      },
+      rebalanceDemoRunner: vi.fn(async () => ({
+        status: "ok",
+        omRate: {
+          provider: "omrate",
+          status: "completed",
+          summary: "http_ok:200",
+        },
+        omRateCandidates: [],
+        planner: {
+          provider: "uniswap",
+          lane: "liquidity_planner_skill",
+          status: "completed",
+          summary: "planner_ok",
+          runtimeDownstream: {
+            executionTarget: "uniswap-v3",
+            executionAction: "depositLpPosition",
+            positionCreateBaseUrl: "https://app.uniswap.org/positions/create",
+            topUniswapPools: [],
+            plannerInput: {
+              chain: "base",
+              tokenA: "USDC",
+              tokenB: "ETH",
+              positionType: "v3",
+            },
+            payloadTemplate: {
+              protocol: "uniswap-v3",
+              chain: "base",
+              investmentId: "planner-investment-id",
+              token: "USDC",
+              tokenSecondary: "ETH",
+              amount: "1000000",
+              amountSecondary: "500000000000000",
+              range: "5",
+            },
+            missingExecutionFields: [],
+          },
+        },
+        selectedPool: {
+          pairLabel: "USDC/ETH",
+        },
+        swapPreparation: {
+          kind: "swap_preparation",
+          status: "assets_match",
+          summary: "Wallet already aligned.",
+        },
+        lpDepositPayloadSeed: {
+          protocol: "uniswap-v3",
+          chain: "base",
+          investmentId: "planner-investment-id",
+          token: "USDC",
+          tokenSecondary: "ETH",
+          amount: "1000000",
+          amountSecondary: "500000000000000",
+          range: "5",
+        },
+        summaries: {
+          omRate: "http_ok:200",
+          planner: "planner_ok",
+        },
+      })),
+      governanceWriteImpl: async () => ({
+        status: "completed",
+        summary: "whitelist_contract_write_confirmed",
+        txHash: "0xpolicy",
+      }),
+      executor: {
+        execute: async (intent) => ({
+          provider: "test",
+          action: intent.action,
+          txRefs: [`0x${intent.action}`],
+          summary: `${intent.action} executed`,
+        }),
+      },
+    });
+    host.bindTelegramReportNotifier({
+      sendExecutionReport: async (event) => {
+        reports.push(`${event.stage}:${event.action}:${event.txRefs?.join(",") ?? ""}`);
+      },
+    });
+
+    const cycle = runGuardianCycle({
+      now: 88,
+      driftThresholdBps: 500,
+      portfolio: buildPortfolioSnapshot(
+        [
+          { kind: "lending", currentBps: 8_000, targetBps: 5_000 },
+          { kind: "lp", currentBps: 2_000, targetBps: 5_000 },
+        ],
+        88,
+      ),
+    });
+
+    await host.handleGuardianCycleResult(cycle);
+    const callback = host.getTelegramApprovalOutbox()[0]?.approveCallbackData;
+    expect(callback).toBeTruthy();
+
+    const resumed = await host.handleTelegramCallback(callback!);
+
+    expect(resumed.handled).toBe(true);
+    expect(resumed.runtimeOutcome?.type).toBe("executed");
+    expect(reports).toContain("guardian_detected:proposeRebalance:");
+    expect(reports).toContain("executed:depositLpPosition:0xpolicy,0xdepositLpPosition");
+
+    // Governance resume completes in one RuntimeCore executed event (requestWhitelistExpansion), while
+    // demoRun still describes the LP deposit the demo path intended.
+    expect(
+      host.getRuntimeEvents(60).some(
+        (e) => e.stage === "executed" && e.entrySource === "mcp" && e.demoRun?.lpExecution.action === "depositLpPosition",
+      ),
+    ).toBe(true);
   });
 
   it("auto-routes non-whitelisted actions into governance approval then resumes execution", async () => {
@@ -618,5 +1064,41 @@ describe("runtime host integration", () => {
       action: "withdrawToOwner",
       txRefs: ["0xownerwithdraw"],
     });
+  });
+
+  it("exposes bounded operator query accessors without duplicating event source of truth", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      whitelistTargets: ["pool"],
+      riskContext: { now: 123 },
+      executor: {
+        execute: async () => ({ provider: "test", summary: "ok" }),
+      },
+    });
+
+    expect(host.getPendingApprovalCount()).toBe(0);
+    expect(host.getRiskEvaluationContext().now).toBe(123);
+    expect(host.getEffectiveWhitelistTargets()).toContain("pool");
+    expect(host.getGuardianLastAssessment()).toBeUndefined();
+
+    const cycle = runGuardianCycle({
+      now: 123,
+      driftThresholdBps: 500,
+      portfolio: buildPortfolioSnapshot(
+        [
+          { kind: "lending", currentBps: 8_000, targetBps: 5_000 },
+          { kind: "lp", currentBps: 2_000, targetBps: 5_000 },
+        ],
+        123,
+      ),
+    });
+    await host.handleGuardianCycleResult(cycle);
+
+    const assessment = host.getGuardianLastAssessment();
+    expect(assessment).toBeTruthy();
+    expect(assessment?.items).toHaveLength(1);
+    expect(assessment?.items[0]?.intentAction).toBe("executeRebalance");
   });
 });

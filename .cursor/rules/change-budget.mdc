@@ -1,0 +1,22 @@
+---
+description: Limit AI task scope and require planning for broad changes
+alwaysApply: true
+---
+
+# Change Budget
+
+Default rule: one task should solve one primary problem.
+
+Always state clear non-goals when a task could easily sprawl.
+
+Never:
+- broaden scope with "while I'm here" refactors
+- redesign multiple subsystems unless the task is explicitly architectural
+- touch unrelated files just because they look similar
+
+Stop and plan first when:
+- a change spans three or more major layers such as `runtime`, `host`, `adapters`, `telegram`, or `mcp`
+- a new feature needs both runtime and adapter work
+- the change alters boundaries, not just behavior
+
+If the requested work is broad, constrain it into a focused slice instead of silently expanding the task.

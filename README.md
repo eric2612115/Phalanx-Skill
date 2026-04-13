@@ -1,60 +1,138 @@
 # Phalanx Skill
 
-Action-plane repository for Phalanx: wallet execution, signing, x402 flows, and orchestration that integrate with OmRate.
+Action-plane repository for Phalanx: wallet execution, signing, x402 flows, MCP exposure, and orchestration against OmRate backend APIs.
 
-## Purpose
+## What It Is
 
-This repository holds the agent-facing execution layer. It stays separate from OmRate frontend (UI) and backend (data plane, auth, DB) so boundaries stay clear.
+`Phalanx-Skill` is the OmRate action-plane repo. It is responsible for:
 
-## Current status
+- agent wallet and signing flows
+- x402 payment-aware execution paths
+- MCP tooling and runtime orchestration
+- governance-aware action execution against OmRate backend APIs
 
-**Active implementation.** The repo now includes:
+It is **not** the OmRate data plane or frontend:
 
-- a dry-run runtime host behind `npm run dev`
-- MCP status / portfolio / action entrypoints
-- Telegram setup and approval routing primitives
-- bounded local memory / secret-guard / policy / risk pipeline
-- guarded adapter contracts and Docker review scripts for third-party install surfaces
+- `OmRate-Backend` owns auth, DB, and backend API source of truth
+- `OmRate-frontend` owns user-facing UI
+- `Phalanx-Skill` owns agent-facing execution behavior
 
-Execution adapters still default to dry-run / normalized contract behavior unless real external tooling is intentionally wired in.
+Current status:
 
-## Out of scope
+- externally **installable** through documented manual setup
+- **not claiming npm or marketplace publish readiness yet**
+- governance is enforced through rules, hooks, `guard:ai`, and CI
 
-- UI components and browser app state
-- Generic market data fetchers owned by backend
-- Direct database access
-- Reimplementing backend auth or persistence
+## Prerequisites
 
-## In scope (action plane)
+- Node.js `>=22`
+- npm
+- local git checkout of this repository
 
-- Agent wallet and signing flows
-- x402 payment and settlement integrations
-- Execution-channel adapters
-- Stable action interfaces that call OmRate backend APIs
-- Policy-aware orchestration for agent actions
+Optional, depending on what you want to use:
 
-## Relationship to other repositories
+- `onchainos` for live execution and capability probes
+- Telegram bot credentials for live approval routing
+- OmRate API credentials
+- chain RPC endpoints
 
-- `OmRate-Backend`: data plane, auth, DB, admin, API source of truth
-- `OmRate-frontend`: user-facing product UI
-- `Phalanx-Skill`: action-plane implementation (this repo)
+## Install
 
-## Capability probes
+Primary install story for this phase:
 
-Structured probes (JSON on stdout) inform adapter branching before execution code hardens:
+```bash
+git clone <your-copy-of-this-repo>
+cd Phalanx-Skill
+npm install
+npm run init
+```
+
+`npm run init` is the operator bootstrap entrypoint. It will:
+
+- create `config.env` from `config.env.example` when needed
+- report `operator_ready` vs `demo_ready`
+- separate operator-tier missing keys from optional keys
+- confirm the x402 baseline story (`OKX/onchainos + execution wallet`, `OMRATE_API_KEY` optional)
+- print the next step to privately message the bot and run `/claim`
+
+Then read these in order:
+
+1. `docs/agent-pack/DECISIONS.md`
+2. `docs/agent-pack/GOVERNANCE.md`
+3. `docs/agent-pack/PRE_MERGE_CHECKLIST.md`
+
+### Host-specific setup
+
+- Cursor: use the checked-in `.cursor/rules/` and `.cursor/hooks.json` from this repo; no fake `.cursor-plugin` metadata is claimed
+- Claude Code: see `.claude-plugin/INSTALL.md`
+- OpenAI Codex CLI: see `.codex/INSTALL.md`
+- OpenClaw: see `.openclaw/INSTALL.md`
+- OpenCode: see `.opencode/INSTALL.md`
+
+### MCP setup
+
+This repo includes a stdio MCP server. Start from:
+
+- `.mcp.json.example`
+- `src/mcp/stdio.ts`
+
+The example uses the real repo startup path and enables MCP through:
+
+- `PHALANX_ENABLE_MCP_STDIO=1`
+- `PHALANX_DRY_RUN_KEEPALIVE=1`
+
+## Verify
+
+Always run:
+
+```bash
+npm run guard:ai
+```
+
+Run these when required by `docs/agent-pack/PRE_MERGE_CHECKLIST.md`:
+
+```bash
+npm run test
+npm run build
+```
+
+For branch-based review or CI-style checks:
+
+```bash
+npm run guard:ai -- --diff-base origin/main
+```
+
+CI uses the same shared quality floor through `.github/workflows/ai-governance.yml`.
+
+## Development
+
+Common commands:
+
+```bash
+npm install
+npm run guard:ai
+npm run test
+npm run dev
+npm run build
+npm run review:docker:all
+npm run smoke:live
+npm run smoke:uniswap-lp-roundtrip
+```
+
+`npm run dev` starts the local dry-run host and prints a startup summary that exposes runtime lifecycle plus MCP and Telegram surface state. When MCP stdio is enabled, startup summary goes to `stderr` so the protocol stream stays clean.
+
+### Capability probes
+
+Structured probes help determine whether real adapter branches are viable:
 
 ```bash
 npx tsx scripts/probe-onchainos.ts
 npx tsx scripts/probe-x402.ts
 ```
 
-The onchainos probe runs `onchainos wallet login --help` and `onchainos defi list --chain base`, then normalizes **walletLogin**, **lendingProtocols**, **lpProtocols**, and **rawCommandsRun** (per-command argv, exit status, stdout/stderr, spawn errors). Missing binaries or failures are reported in that structure instead of crashing.
+### Third-party install review
 
-The x402 probe creates a temp npm project, runs `npm install @x402/fetch`, then imports the package with Node—so resolution matches real adapter installs. Requires `npm` on PATH and registry access; failures are normalized in JSON like other probes.
-
-## Third-party install review
-
-Do not treat adapter code as implicit approval to install third-party tools directly on the host.
+Do not treat adapter code as approval to install third-party tools directly on the host.
 
 Review commands:
 
@@ -69,94 +147,83 @@ Reference docs:
 - `docs/third-party-install-review.md`
 - `docs/third-party-review-baseline.md`
 
-Current rule: installer behavior is reviewed in Docker first; host installation is a separate decision.
+### Operator Bootstrap
 
-### Release decision rules (P0 / probes)
-
-- Capability probes decide which adapter branches are viable.
-- **Lending:** if a preferred lending path fails but another supported path exists in the same category, substitution is allowed without redefining the product goal.
-- **LP (Uniswap / PancakeSwap):** these are P0 product targets, not optional examples. Probes may change the execution adapter branch, but **must not silently swap the protocol target**. If either target is impossible, treat it as a **scope review** event, not an invisible substitution.
-
-## Local development
-
-```bash
-npm install
-npm run test
-npm run dev
-npm run build
-npm run review:docker:all
-npm run smoke:live
-npm run smoke:uniswap-lp-roundtrip
-```
-
-`npm run dev` starts the local dry-run host and prints a startup summary that exposes current lifecycle plus the local MCP / Telegram surface state. It keeps the process alive by default for local verification.
-
-Useful env flags:
-
-- `PHALANX_DRY_RUN_KEEPALIVE=0` - print startup summary and exit
-- `PHALANX_GUARDIAN_ENABLED=1` - enable the local Guardian ticker during dry-run
-
-## Live-capable runtime
-
-The current runtime is live-capable, but it still degrades safely when credentials, RPC endpoints, binaries, or contract addresses are missing.
-
-`config.env` is loaded at startup. Important fields:
+Operator-facing required inputs during `npm run init`:
 
 - `PHALANX_RUNTIME_MODE=live`
 - `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ALLOWED_USER_ID`
 - `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_API_PASSPHRASE`
-- `OMRATE_API_KEY`, `OMRATE_API_BASE_URL`
-- `XLAYER_RPC_URL`, `BASE_RPC_URL`
-- `POLICY_OWNER_KEY`, `WHITELIST_POLICY_ADDRESS`
-- `PHALANX_OWNER_EVM_ADDRESS` for `withdrawToOwner / sweepToOwner`
-- `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS` for live execution address selection
+- `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS`
 
-Optional live toggles:
+Demo-ready additions:
 
-- `PHALANX_ENABLE_MCP_STDIO=1` to attach MCP stdio transport
-- `PHALANX_EXECUTION_BACKEND=onchainos_skill` to route state-changing execution through the skill-backed executor instead of the dry-run fallback
-- `PHALANX_X402_PAYMENT_ENABLED=1` with private key env to attempt x402-wrapped fetch paths
-- protocol-specific env for Uniswap / Pancake quote or position reads
-- `PHALANX_BASE_GAS_RESERVE_WEI` / `PHALANX_XLAYER_GAS_RESERVE_WEI` for owner sweep gas buffers
+- `POLICY_OWNER_KEY`
+- `WHITELIST_POLICY_ADDRESS`
+- `PHALANX_OWNER_EVM_ADDRESS`
+- `BASE_RPC_URL`
 
-`TEST_WALLET_ADDRESS` should be treated as a dry-run / synthetic fallback only. In live mode, the skill-backed executor now prefers `PHALANX_WALLET_ADDRESS` or `AGENT_WALLET_ADDRESS`.
+Derived / fixed / auto-persisted values:
 
-Before any real live execution, first transfer small test funds into the OKX Agentic Wallet and verify receipt with `onchainos wallet balance`.
+- `TELEGRAM_ALLOWED_USER_ID` is written automatically after the first successful Telegram `/claim`
+- `OMRATE_API_KEY` is optional
+- `OMRATE_API_BASE_URL` defaults to `https://api.omrate.com`
+- `XLAYER_RPC_URL` defaults to the official `https://rpc.xlayer.tech`
+- x402 baseline does not require a local `PHALANX_X402_PRIVATE_KEY`
 
-## Live smoke
+### Telegram Operator Surface
 
-Use the smoke script to verify startup and runtime orchestration:
+Once the runtime is `READY`, the bound Telegram owner chat can use bounded operator queries for:
+
+- readiness / pending approvals
+- portfolio / balances / positions
+- recent events / guardian actions / tx refs
+- why blocked / what next
+- whitelist / policy summary
+- risk summary / guardian assessment
+- owner wallet / agent wallet / binding summary
+
+This is intentionally a bounded keyword router, not an open-ended chat assistant. Unsupported requests are redirected to the supported capability list.
+
+### Live-capable runtime
+
+The runtime is live-capable, but still degrades safely when credentials, RPC endpoints, binaries, or contract addresses are missing.
+
+Useful toggles:
+
+- `PHALANX_ENABLE_MCP_STDIO=1`
+- `PHALANX_EXECUTION_BACKEND=onchainos_skill`
+- `PHALANX_X402_PAYMENT_ENABLED=1`
+- `PHALANX_DRY_RUN_KEEPALIVE=0`
+- `PHALANX_GUARDIAN_ENABLED=1`
+
+### Live smoke
 
 ```bash
 npm run smoke:live
-```
-
-If your real credentials are not loaded yet, you can still verify the approval/resume path with a synthetic READY host:
-
-```bash
 PHALANX_SMOKE_SYNTHETIC_READY=1 npm run smoke:live
 ```
 
-This verifies:
+For operator bootstrap verification, also run:
 
-- config loading from `config.env`
-- startup summary
-- MCP status path
-- portfolio read when READY
-- blocked Uniswap LP approval path -> Telegram callback -> RuntimeCore resume
-- owner-withdraw approval path -> Telegram callback -> RuntimeCore resume
-- skill readiness snapshots for `onchainos` and `Uniswap liquidity-planner`
+```bash
+npm run init
+```
 
-## Uniswap LP live roundtrip
+Approval / reporting behavior:
 
-Use the dedicated roundtrip script when you want real-chain proof instead of synthetic orchestration only:
+- Guardian and runtime events can emit Telegram execution reports
+- blocked actions route into Telegram approval when policy requires it
+- approval callbacks resume through `RuntimeCore`, not a side channel
+- the rebalance demo path now carries structured pool / swap / LP / approval metadata into runtime events and Telegram/operator queries
+
+### Uniswap LP live roundtrip
 
 ```bash
 npm run smoke:uniswap-lp-roundtrip
 ```
 
-Required operator-supplied env for the live LP roundtrip:
+Required env for the focused operator roundtrip:
 
 - `PHALANX_LP_INVESTMENT_ID`
 - `PHALANX_LP_AMOUNT`
@@ -164,24 +231,16 @@ Required operator-supplied env for the live LP roundtrip:
 - `PHALANX_LP_TICK_LOWER`
 - `PHALANX_LP_TICK_UPPER`
 
-`PHALANX_LP_AMOUNT` and `PHALANX_LP_AMOUNT_SECONDARY` are expected in minimal units.
+For why live Uniswap V3 execution uses direct `NonfungiblePositionManager` calldata instead of the default high-level LP route, see `docs/uniswap-v3-direct-execution.md`.
 
-Optional env:
+## Security
 
-- `PHALANX_LP_CHAIN` (default `base`)
-- `PHALANX_LP_TOKEN_A`, `PHALANX_LP_TOKEN_B`
-- `PHALANX_LP_TOKEN`
-- `PHALANX_LP_TOKEN_SECONDARY`
-- `PHALANX_LP_AMOUNT_SECONDARY`
-- `PHALANX_LP_DISCOVERY_PAGES`
-- `PHALANX_LP_WITHDRAW_PLATFORM_ID`
-- `PHALANX_LP_WITHDRAW_TOKEN_ID`
-- `PHALANX_LP_WITHDRAW_RATIO`
-- `PHALANX_LP_WITHDRAW_AMOUNT`
-- `PHALANX_LP_RANGE` as planner-only context
+- Never commit `.env`, `config.env`, wallet keys, API secrets, or real operational credentials.
+- Use `config.env.example` as a template only.
+- Treat local hooks as helpful, not sufficient; CI is the final enforcement layer.
+- Review third-party tool installation in Docker before considering host installation.
+- Keep MCP env values local and out of version control.
 
-The roundtrip script intentionally does not persist local LP metadata. It refreshes discovery and position identifiers from `onchainos` before the withdraw leg so demo evidence stays tied to current chain state.
+## License
 
-For why the live Uniswap V3 lane is wired through direct `NonfungiblePositionManager` calldata rather than the default high-level LP route, see `docs/uniswap-v3-direct-execution.md`.
-
-Short-term demo governance is intentionally modeled around fixed policy items such as `aave-v3`, `morpho-vaults`, `uniswap-v3`, `pancakeswap-v3`, and `whitelist-admin`. This is the compatibility layer that will later evolve into agent-managed policy bundles without rewriting the current approval plumbing.
+No public license is declared in this repository yet. Until a formal license is added, treat the repo as internal/private and do not assume redistribution rights.

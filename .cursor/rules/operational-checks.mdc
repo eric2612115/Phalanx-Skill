@@ -1,17 +1,21 @@
 ---
 description: Operational checks for the Phalanx-Skill action-plane repo
-alwaysApply: false
+alwaysApply: true
 ---
 
 # Operational Checks
 
 During active development:
-- Run `npm run test` after meaningful changes; use `npm run build` when touching TypeScript config or exports.
-- Keep `README.md` and this file consistent with required tooling (scripts, env assumptions) as they evolve.
+- Run `npm run test` after meaningful changes before claiming completion.
+- Run `npm run build` when touching TypeScript config, exports, startup wiring, or env loading.
+- Run `npm run guard:ai` when changing architecture boundaries, large files, or multi-layer behavior.
+- Keep `README.md`, runbooks, and rules consistent with required tooling and env assumptions as they evolve.
 
 Update docs when any of the following changes:
 - Required env vars, backend endpoints, or integration assumptions change.
 - Cross-repo ownership, trust boundaries, or handoff points change.
 - New mandatory checks are added to CI or local workflow.
+
+If required verification cannot be run, state exactly what was skipped and why.
 
 Never commit secrets, wallet material, or real operational credentials.

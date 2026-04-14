@@ -9,15 +9,25 @@ import {
 import {
   executeOnchainosDefiExecution,
   executeOnchainosExecutionSteps,
+  extractOnchainosDefiPositionIdentifiers,
   parseOnchainosDefiDetail,
   readOnchainosDefiDetail,
+  readOnchainosDefiPositionDetail,
+  readOnchainosDefiPositions,
+  resolveLpNftTokenIdFromIdentifiers,
+  resolvePhalanxExecutionWalletAddress,
   type ExecuteOnchainosDefiExecutionHooks,
   type OnchainosDefiDetail,
   type OnchainosDefiDetailInput,
   type OnchainosDefiDetailResult,
   type OnchainosDefiExecutionResult,
   type OnchainosDefiExecutionStep,
+  type OnchainosDefiPositionDetailInput,
+  type OnchainosDefiPositionDetailResult,
+  type OnchainosDefiPositionsInput,
+  type OnchainosDefiPositionsResult,
   type OnchainosExecutionCommandInput,
+  type ResolvePhalanxExecutionWalletAddressInput,
 } from "./onchainos.js";
 
 export type SupportedLpProtocol = "uniswap-v3" | "pancakeswap-v3";
@@ -58,8 +68,40 @@ type DirectUniswapPosition = {
   readonly tokensOwed1: bigint;
 };
 
+type DirectUniswapExecutionMetadata = {
+  readonly contract: Address;
+  readonly fee: number;
+  readonly currentTick?: number;
+  readonly tickSpacing?: number;
+  readonly tokens: [
+    {
+      readonly poolAddress: Address;
+      readonly approvalAddress?: Address;
+      readonly symbol: string;
+      readonly native: boolean;
+      readonly originalAddress: string;
+    },
+    {
+      readonly poolAddress: Address;
+      readonly approvalAddress?: Address;
+      readonly symbol: string;
+      readonly native: boolean;
+      readonly originalAddress: string;
+    },
+  ];
+};
+
 export type ExecuteLpPositionIntentHooks = ExecuteOnchainosDefiExecutionHooks & {
   readonly readDefiDetailImpl?: (input: OnchainosDefiDetailInput) => Promise<OnchainosDefiDetailResult>;
+  readonly readDefiPositionsImpl?: (input: OnchainosDefiPositionsInput) => Promise<OnchainosDefiPositionsResult>;
+  readonly readDefiPositionDetailImpl?: (
+    input: OnchainosDefiPositionDetailInput,
+  ) => Promise<OnchainosDefiPositionDetailResult>;
+  readonly readUniswapPoolMetadataImpl?: (input: {
+    readonly chain: string;
+    readonly poolAddress: string;
+    readonly env: NodeJS.ProcessEnv;
+  }) => Promise<DirectUniswapExecutionMetadata>;
   readonly readUniswapPositionImpl?: (input: {
     readonly chain: string;
     readonly contract: string;
@@ -67,6 +109,11 @@ export type ExecuteLpPositionIntentHooks = ExecuteOnchainosDefiExecutionHooks & 
     readonly env: NodeJS.ProcessEnv;
   }) => Promise<DirectUniswapPosition>;
   readonly nowSecondsImpl?: () => number;
+  /** Test hook: replaces only Onchain OS managed lookup; env overrides still win. */
+  readonly resolveExecutionWalletAddressImpl?: (input: {
+    readonly env: NodeJS.ProcessEnv;
+    readonly chain: string;
+  }) => Promise<string | undefined>;
 };
 
 export type LpExecutionNormalization =
@@ -81,6 +128,7 @@ export type LpExecutionNormalization =
         | "UNSUPPORTED_LP_PROTOCOL"
         | "LP_INVESTMENT_ID_REQUIRED"
         | "LP_CHAIN_REQUIRED"
+        | "LP_WALLET_UNRESOLVED"
         | "LP_TOKEN_REQUIRED"
         | "LP_AMOUNT_REQUIRED"
         | "LP_SECONDARY_TOKEN_REQUIRED"
@@ -93,13 +141,18 @@ function stringField(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function defaultExecutionWalletAddress(env: NodeJS.ProcessEnv): string | undefined {
-  const runtimeMode = (env.PHALANX_RUNTIME_MODE ?? "").trim().toLowerCase();
-  const livePrimary = (env.PHALANX_WALLET_ADDRESS ?? env.AGENT_WALLET_ADDRESS ?? "").trim();
-  if (runtimeMode === "live") {
-    return livePrimary || undefined;
+/** Sync path after async managed resolution: env override, else dry-run test wallet only. */
+function syncFallbackExecutionWalletAddress(env: NodeJS.ProcessEnv): string | undefined {
+  const override =
+    (env.PHALANX_WALLET_ADDRESS ?? "").trim() || (env.AGENT_WALLET_ADDRESS ?? "").trim() || undefined;
+  if (override) {
+    return override;
   }
-  return livePrimary || (env.TEST_WALLET_ADDRESS ?? "").trim() || undefined;
+  const runtimeMode = (env.PHALANX_RUNTIME_MODE ?? "").trim().toLowerCase();
+  if (runtimeMode === "live") {
+    return undefined;
+  }
+  return (env.TEST_WALLET_ADDRESS ?? "").trim() || undefined;
 }
 
 function resolveProtocol(payload: LpExecutionPayload, target?: string): SupportedLpProtocol | undefined {
@@ -115,6 +168,7 @@ const MAX_UINT128 = (2n ** 128n) - 1n;
 const DEFAULT_DEADLINE_SECONDS = 10 * 60;
 
 const erc20Abi = parseAbi(["function approve(address spender, uint256 value) returns (bool)"]);
+const erc20MetadataAbi = parseAbi(["function symbol() view returns (string)"]);
 const nonfungiblePositionManagerAbi = parseAbi([
   "function multicall(bytes[] data) payable returns (bytes[] results)",
   "function mint((address token0,address token1,uint24 fee,int24 tickLower,int24 tickUpper,uint256 amount0Desired,uint256 amount1Desired,uint256 amount0Min,uint256 amount1Min,address recipient,uint256 deadline) params) payable returns (uint256 tokenId,uint128 liquidity,uint256 amount0,uint256 amount1)",
@@ -123,6 +177,16 @@ const nonfungiblePositionManagerAbi = parseAbi([
   "function collect((uint256 tokenId,address recipient,uint128 amount0Max,uint128 amount1Max) params) payable returns (uint256 amount0,uint256 amount1)",
   "function positions(uint256 tokenId) view returns (uint96 nonce,address operator,address token0,address token1,uint24 fee,int24 tickLower,int24 tickUpper,uint128 liquidity,uint256 feeGrowthInside0LastX128,uint256 feeGrowthInside1LastX128,uint128 tokensOwed0,uint128 tokensOwed1)",
 ]);
+const uniswapV3PoolAbi = parseAbi([
+  "function token0() view returns (address)",
+  "function token1() view returns (address)",
+  "function fee() view returns (uint24)",
+  "function tickSpacing() view returns (int24)",
+  "function slot0() view returns (uint160 sqrtPriceX96,int24 tick,uint16 observationIndex,uint16 observationCardinality,uint16 observationCardinalityNext,uint8 feeProtocol,bool unlocked)",
+]);
+const DEFAULT_UNISWAP_V3_POSITION_MANAGERS: Readonly<Record<string, Address>> = {
+  base: "0x03a520b32c04bf3beef7beb72e919cf822ed34f1",
+};
 
 function isAddressLike(value: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(value);
@@ -144,6 +208,23 @@ function normalizeWrappedNativeAddress(chain: string): Address | undefined {
     default:
       return undefined;
   }
+}
+
+function nativeAssetSymbol(chain: string): string {
+  switch (chain.trim().toLowerCase()) {
+    case "base":
+      return "ETH";
+    default:
+      return "NATIVE";
+  }
+}
+
+function resolveUniswapV3PositionManager(chain: string, env: NodeJS.ProcessEnv): Address | undefined {
+  const override = stringField(env.PHALANX_UNISWAP_V3_POSITION_MANAGER);
+  if (override && isAddressLike(override)) {
+    return override as Address;
+  }
+  return DEFAULT_UNISWAP_V3_POSITION_MANAGERS[chain.trim().toLowerCase()];
 }
 
 function feeRateToUniswapFee(raw: string | undefined): number | undefined {
@@ -170,6 +251,48 @@ function parseSignedInt(value: string | undefined): number | undefined {
     return undefined;
   }
   return Number(value);
+}
+
+function parseRangePercent(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/%$/, "");
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function alignTickDown(value: number, tickSpacing: number): number {
+  return Math.floor(value / tickSpacing) * tickSpacing;
+}
+
+function alignTickUp(value: number, tickSpacing: number): number {
+  return Math.ceil(value / tickSpacing) * tickSpacing;
+}
+
+export function deriveTickBoundsFromRange(input: {
+  readonly currentTick: number;
+  readonly tickSpacing: number;
+  readonly range: string;
+}): { tickLower: number; tickUpper: number } | undefined {
+  const rangePercent = parseRangePercent(input.range);
+  if (rangePercent === undefined || !Number.isFinite(input.currentTick) || input.tickSpacing <= 0) {
+    return undefined;
+  }
+  const rawDelta = Math.ceil(Math.log(1 + rangePercent / 100) / Math.log(1.0001));
+  const delta = Math.max(input.tickSpacing, rawDelta);
+  const tickLower = alignTickDown(input.currentTick - delta, input.tickSpacing);
+  let tickUpper = alignTickUp(input.currentTick + delta, input.tickSpacing);
+  if (tickUpper <= tickLower) {
+    tickUpper = tickLower + input.tickSpacing;
+  }
+  return { tickLower, tickUpper };
 }
 
 function parseRatio(value: string | undefined): { numerator: bigint; denominator: bigint } | undefined {
@@ -216,29 +339,7 @@ function matchTokenInput(
   return null;
 }
 
-function normalizeUniswapDetail(
-  detail: OnchainosDefiDetail,
-  chain: string,
-): {
-  contract: Address;
-  fee: number;
-  tokens: [
-    {
-      readonly poolAddress: Address;
-      readonly approvalAddress?: Address;
-      readonly symbol: string;
-      readonly native: boolean;
-      readonly originalAddress: string;
-    },
-    {
-      readonly poolAddress: Address;
-      readonly approvalAddress?: Address;
-      readonly symbol: string;
-      readonly native: boolean;
-      readonly originalAddress: string;
-    },
-  ];
-} | null {
+function normalizeUniswapDetail(detail: OnchainosDefiDetail, chain: string): DirectUniswapExecutionMetadata | null {
   const contract = stringField(detail.contract);
   const fee = feeRateToUniswapFee(detail.feeRate);
   if (!contract || !isAddressLike(contract) || fee === undefined || detail.underlyingToken.length !== 2) {
@@ -290,6 +391,95 @@ function normalizeUniswapDetail(
   return {
     contract: contract as Address,
     fee,
+    tokens: sorted,
+  };
+}
+
+async function readDirectUniswapPoolMetadata(input: {
+  readonly chain: string;
+  readonly poolAddress: string;
+  readonly env: NodeJS.ProcessEnv;
+}): Promise<DirectUniswapExecutionMetadata> {
+  const rpcUrl = (input.env.BASE_RPC_URL ?? "").trim();
+  const chain = input.chain.trim().toLowerCase();
+  if (chain !== "base" || !rpcUrl) {
+    throw new Error("Direct Uniswap V3 execution currently requires BASE_RPC_URL and chain=base.");
+  }
+  if (!isAddressLike(input.poolAddress)) {
+    throw new Error("Direct Uniswap V3 execution requires a valid poolAddress.");
+  }
+  const contract = resolveUniswapV3PositionManager(input.chain, input.env);
+  if (!contract) {
+    throw new Error(
+      "Direct Uniswap V3 execution requires PHALANX_UNISWAP_V3_POSITION_MANAGER or a built-in manager for the selected chain.",
+    );
+  }
+
+  const client = createPublicClient({
+    transport: http(rpcUrl),
+  });
+  const [token0, token1, fee, tickSpacing, slot0] = await Promise.all([
+    client.readContract({
+      address: input.poolAddress as Address,
+      abi: uniswapV3PoolAbi,
+      functionName: "token0",
+      args: [],
+    }),
+    client.readContract({
+      address: input.poolAddress as Address,
+      abi: uniswapV3PoolAbi,
+      functionName: "token1",
+      args: [],
+    }),
+    client.readContract({
+      address: input.poolAddress as Address,
+      abi: uniswapV3PoolAbi,
+      functionName: "fee",
+      args: [],
+    }),
+    client.readContract({
+      address: input.poolAddress as Address,
+      abi: uniswapV3PoolAbi,
+      functionName: "tickSpacing",
+      args: [],
+    }),
+    client.readContract({
+      address: input.poolAddress as Address,
+      abi: uniswapV3PoolAbi,
+      functionName: "slot0",
+      args: [],
+    }),
+  ]);
+  const wrappedNative = normalizeWrappedNativeAddress(input.chain);
+  const nativeSymbol = nativeAssetSymbol(input.chain);
+  const tokenEntries = await Promise.all(
+    [token0, token1].map(async (tokenAddress) => {
+      const isNative = wrappedNative !== undefined && tokenAddress.toLowerCase() === wrappedNative.toLowerCase();
+      const symbol = isNative
+        ? nativeSymbol
+        : await client.readContract({
+            address: tokenAddress,
+            abi: erc20MetadataAbi,
+            functionName: "symbol",
+            args: [],
+          });
+      return {
+        poolAddress: tokenAddress,
+        approvalAddress: isNative ? undefined : tokenAddress,
+        symbol,
+        native: isNative,
+        originalAddress: tokenAddress,
+      };
+    }),
+  );
+  const sorted = [...tokenEntries].sort((left, right) =>
+    left.poolAddress.toLowerCase().localeCompare(right.poolAddress.toLowerCase()),
+  ) as DirectUniswapExecutionMetadata["tokens"];
+  return {
+    contract,
+    fee: Number(fee),
+    currentTick: Number(slot0[1]),
+    tickSpacing: Number(tickSpacing),
     tokens: sorted,
   };
 }
@@ -347,6 +537,60 @@ async function readDirectUniswapPosition(input: {
   };
 }
 
+async function discoverDirectUniswapWithdrawTokenId(input: {
+  readonly address: string;
+  readonly chain: string;
+  readonly platformId?: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly hooks: ExecuteLpPositionIntentHooks;
+}): Promise<{ ok: true; tokenId: string } | { ok: false; code: string; summary: string }> {
+  const readPositions = input.hooks.readDefiPositionsImpl ?? readOnchainosDefiPositions;
+  const readDetail = input.hooks.readDefiPositionDetailImpl ?? readOnchainosDefiPositionDetail;
+  if (input.platformId) {
+    const detail = await readDetail({
+      address: input.address,
+      chain: input.chain,
+      platformId: input.platformId,
+      env: input.env,
+    });
+    if (detail.status !== "completed") {
+      return {
+        ok: false,
+        code: "LP_TOKEN_ID_DISCOVERY_EMPTY",
+        summary:
+          detail.summary ||
+          "Onchain OS defi position-detail did not complete; cannot discover tokenId for withdraw.",
+      };
+    }
+    const picked = resolveLpNftTokenIdFromIdentifiers(extractOnchainosDefiPositionIdentifiers(detail.stdout ?? ""));
+    if (!picked.ok) {
+      return { ok: false, code: picked.code, summary: picked.summary };
+    }
+    return { ok: true, tokenId: picked.tokenId };
+  }
+  const positions = await readPositions({
+    address: input.address,
+    chains: [input.chain],
+    chain: input.chain,
+    env: input.env,
+  });
+  if (positions.status !== "completed") {
+    return {
+      ok: false,
+      code: "LP_TOKEN_ID_DISCOVERY_EMPTY",
+      summary:
+        positions.summary || "Onchain OS defi positions did not complete; cannot discover tokenId for withdraw.",
+    };
+  }
+  const picked = resolveLpNftTokenIdFromIdentifiers(
+    extractOnchainosDefiPositionIdentifiers(positions.stdout ?? ""),
+  );
+  if (!picked.ok) {
+    return { ok: false, code: picked.code, summary: picked.summary };
+  }
+  return { ok: true, tokenId: picked.tokenId };
+}
+
 async function executeDirectUniswapV3Intent(
   action: LpExecutionAction,
   payload: LpExecutionPayload,
@@ -354,49 +598,72 @@ async function executeDirectUniswapV3Intent(
   hooks: ExecuteLpPositionIntentHooks,
 ): Promise<OnchainosDefiExecutionResult | { mode: "lp_execution_invalid"; code: string; summary: string }> {
   const investmentId = stringField(payload.investmentId);
+  const poolAddress = stringField(payload.poolAddress);
   const chain = stringField(payload.chain);
-  const address = stringField(payload.address) ?? defaultExecutionWalletAddress(env) ?? "";
-  if (!investmentId || !chain || !address) {
-    return {
-      mode: "lp_execution_invalid",
-      code: "LP_INVESTMENT_ID_REQUIRED",
-      summary: "Direct Uniswap V3 execution requires investmentId, chain, and wallet address.",
-    };
-  }
-
-  const readDefiDetail = hooks.readDefiDetailImpl ?? readOnchainosDefiDetail;
-  const detailResult = await readDefiDetail({
-    investmentId,
-    chain,
-    env,
-  });
-  if (detailResult.status !== "completed") {
-    return {
-      provider: "onchainos",
-      lane: "defi_execute",
-      status: detailResult.status,
-      argv: detailResult.argv,
-      summary: detailResult.summary,
-      stdout: detailResult.stdout,
-      stderr: detailResult.stderr,
-      exitCode: detailResult.exitCode,
-    };
-  }
-  const detail = parseOnchainosDefiDetail(detailResult.stdout ?? "");
-  if (!detail) {
+  const address = stringField(payload.address) ?? syncFallbackExecutionWalletAddress(env) ?? "";
+  if (!chain || !address) {
     return {
       mode: "lp_execution_invalid",
       code: "LP_CHAIN_REQUIRED",
-      summary: "Could not parse onchainos defi detail output for direct Uniswap V3 execution.",
+      summary: "Direct Uniswap V3 execution requires chain and wallet address.",
     };
   }
-
-  const normalizedDetail = normalizeUniswapDetail(detail, chain);
+  let normalizedDetail: DirectUniswapExecutionMetadata | null = null;
+  if (poolAddress && isAddressLike(poolAddress)) {
+    const readPoolMetadata = hooks.readUniswapPoolMetadataImpl ?? readDirectUniswapPoolMetadata;
+    try {
+      normalizedDetail = await readPoolMetadata({
+        chain,
+        poolAddress,
+        env,
+      });
+    } catch (error) {
+      return {
+        mode: "lp_execution_invalid",
+        code: "LP_CHAIN_REQUIRED",
+        summary: error instanceof Error ? error.message : "Could not read Uniswap V3 pool metadata.",
+      };
+    }
+  } else if (investmentId) {
+    const readDefiDetail = hooks.readDefiDetailImpl ?? readOnchainosDefiDetail;
+    const detailResult = await readDefiDetail({
+      investmentId,
+      chain,
+      env,
+    });
+    if (detailResult.status !== "completed") {
+      return {
+        provider: "onchainos",
+        lane: "defi_execute",
+        status: detailResult.status,
+        argv: detailResult.argv,
+        summary: detailResult.summary,
+        stdout: detailResult.stdout,
+        stderr: detailResult.stderr,
+        exitCode: detailResult.exitCode,
+      };
+    }
+    const detail = parseOnchainosDefiDetail(detailResult.stdout ?? "");
+    if (!detail) {
+      return {
+        mode: "lp_execution_invalid",
+        code: "LP_CHAIN_REQUIRED",
+        summary: "Could not parse onchainos defi detail output for direct Uniswap V3 execution.",
+      };
+    }
+    normalizedDetail = normalizeUniswapDetail(detail, chain);
+  } else {
+    return {
+      mode: "lp_execution_invalid",
+      code: "LP_INVESTMENT_ID_REQUIRED",
+      summary: "Direct Uniswap V3 execution requires payload.poolAddress or payload.investmentId.",
+    };
+  }
   if (!normalizedDetail) {
     return {
       mode: "lp_execution_invalid",
       code: "UNSUPPORTED_LP_PROTOCOL",
-      summary: "Direct Uniswap V3 execution requires a pool detail with contract, feeRate, and two underlying tokens.",
+      summary: "Direct Uniswap V3 execution requires pool metadata with contract, fee, and two underlying tokens.",
     };
   }
 
@@ -405,8 +672,22 @@ async function executeDirectUniswapV3Intent(
     const amount = stringField(payload.amount);
     const tokenSecondary = stringField(payload.tokenSecondary);
     const amountSecondary = stringField(payload.amountSecondary);
-    const tickLower = parseSignedInt(stringField(payload.tickLower));
-    const tickUpper = parseSignedInt(stringField(payload.tickUpper));
+    const range = stringField(payload.range);
+    let tickLower = parseSignedInt(stringField(payload.tickLower));
+    let tickUpper = parseSignedInt(stringField(payload.tickUpper));
+    if ((tickLower === undefined || tickUpper === undefined) && range) {
+      const derived = deriveTickBoundsFromRange({
+        currentTick: normalizedDetail.currentTick ?? Number.NaN,
+        tickSpacing: normalizedDetail.tickSpacing ?? 0,
+        range,
+      });
+      if (tickLower === undefined) {
+        tickLower = derived?.tickLower;
+      }
+      if (tickUpper === undefined) {
+        tickUpper = derived?.tickUpper;
+      }
+    }
     if (!token || !amount || !tokenSecondary || !amountSecondary) {
       return {
         mode: "lp_execution_invalid",
@@ -540,14 +821,32 @@ async function executeDirectUniswapV3Intent(
     );
   }
 
-  const tokenId = stringField(payload.tokenId);
+  let tokenId = stringField(payload.tokenId);
   const ratio = parseRatio(stringField(payload.ratio) ?? "1");
-  if (!tokenId || !ratio) {
+  if (!ratio) {
     return {
       mode: "lp_execution_invalid",
       code: "LP_TOKEN_ID_OR_RATIO_REQUIRED",
-      summary: "Direct Uniswap V3 withdraw requires tokenId and a ratio between 0 and 1.",
+      summary: "Direct Uniswap V3 withdraw requires a ratio between 0 and 1 (defaults to 1 when omitted).",
     };
+  }
+  if (!tokenId) {
+    const platformId = stringField(payload.platformId);
+    const discovery = await discoverDirectUniswapWithdrawTokenId({
+      address,
+      chain,
+      platformId,
+      env,
+      hooks,
+    });
+    if (!discovery.ok) {
+      return {
+        mode: "lp_execution_invalid",
+        code: discovery.code,
+        summary: discovery.summary,
+      };
+    }
+    tokenId = discovery.tokenId;
   }
   const readPosition = hooks.readUniswapPositionImpl ?? readDirectUniswapPosition;
   let position: DirectUniswapPosition;
@@ -667,7 +966,16 @@ export function normalizeLpExecutionRequest(
     };
   }
 
-  const address = stringField(lpPayload.address) ?? defaultExecutionWalletAddress(env) ?? "";
+  const address = stringField(lpPayload.address) ?? syncFallbackExecutionWalletAddress(env) ?? "";
+  const runtimeMode = (env.PHALANX_RUNTIME_MODE ?? "").trim().toLowerCase();
+  if (!address && runtimeMode === "live") {
+    return {
+      ok: false,
+      code: "LP_WALLET_UNRESOLVED",
+      message:
+        "Live LP execution requires an explicit wallet override or a managed Onchain OS wallet address for the requested chain.",
+    };
+  }
 
   if (action === "depositLpPosition") {
     const token = stringField(lpPayload.token);
@@ -732,11 +1040,13 @@ export function normalizeLpExecutionRequest(
   const tokenId = stringField(lpPayload.tokenId);
   const ratio = stringField(lpPayload.ratio);
   const amount = stringField(lpPayload.amount);
-  if (!tokenId && !ratio && !amount) {
+  const platformId = stringField(lpPayload.platformId);
+  if (!tokenId && !ratio && !amount && !platformId) {
     return {
       ok: false,
       code: "LP_TOKEN_ID_OR_RATIO_REQUIRED",
-      message: "LP withdraw requires payload.tokenId, payload.ratio, or payload.amount.",
+      message:
+        "LP withdraw requires payload.tokenId, payload.ratio, payload.amount, or payload.platformId (for Onchain OS tokenId discovery).",
     };
   }
 
@@ -749,7 +1059,7 @@ export function normalizeLpExecutionRequest(
       investmentId,
       address,
       chain,
-      platformId: stringField(lpPayload.platformId),
+      platformId,
       tokenId,
       ratio,
       amount,
@@ -765,16 +1075,37 @@ export async function executeLpPositionIntent(
   target?: string,
   hooks: ExecuteLpPositionIntentHooks = {},
 ): Promise<OnchainosDefiExecutionResult | { mode: "lp_execution_invalid"; code: string; summary: string }> {
-  const normalized = normalizeLpExecutionRequest(action, payload, env, target);
+  const lpPayload = payload as LpExecutionPayload;
+  const chain = stringField(lpPayload.chain);
+  let effectivePayload: Readonly<Record<string, unknown>> = payload;
+  if (!stringField(lpPayload.address) && chain) {
+    const managedResolver = hooks.resolveExecutionWalletAddressImpl;
+    const resolved = await resolvePhalanxExecutionWalletAddress(
+      { env, chain } satisfies ResolvePhalanxExecutionWalletAddressInput,
+      managedResolver
+        ? {
+            readManagedWalletAddress: async (inp) => {
+              const fromHook = await managedResolver({ env: inp.env, chain: inp.chain });
+              return fromHook ?? null;
+            },
+          }
+        : {},
+    );
+    if (resolved) {
+      effectivePayload = { ...payload, address: resolved };
+    }
+  }
+  const protocol = resolveProtocol(effectivePayload as LpExecutionPayload, target);
+  if (protocol === "uniswap-v3") {
+    return executeDirectUniswapV3Intent(action, effectivePayload as LpExecutionPayload, env, hooks);
+  }
+  const normalized = normalizeLpExecutionRequest(action, effectivePayload, env, target);
   if (!normalized.ok) {
     return {
       mode: "lp_execution_invalid",
       code: normalized.code,
       summary: normalized.message,
     };
-  }
-  if (normalized.protocol === "uniswap-v3") {
-    return executeDirectUniswapV3Intent(action, payload as LpExecutionPayload, env, hooks);
   }
   return executeOnchainosDefiExecution(normalized.command, env, hooks);
 }

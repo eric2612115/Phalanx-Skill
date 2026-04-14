@@ -114,10 +114,46 @@ function renderRuntimeExecutionReport(event: RuntimeEvent): string {
     lines.push(`Risk: ${event.riskNotes.join(" | ")}`);
   }
   if (event.txRefs && event.txRefs.length > 0) {
-    lines.push(`Tx: ${event.txRefs.join(", ")}`);
+    lines.push("", "Transactions:");
+    for (const [index, txRef] of event.txRefs.entries()) {
+      lines.push(`${index + 1}. ${txRef}`);
+      const explorerUrl = buildExplorerTxUrl(event, txRef);
+      if (explorerUrl) {
+        lines.push(explorerUrl);
+      }
+    }
   }
   appendDemoRunLines(lines, event);
   return lines.join("\n");
+}
+
+function buildExplorerTxUrl(event: RuntimeEvent, txRef: string): string | undefined {
+  if (!/^0x[a-fA-F0-9]{64}$/.test(txRef)) {
+    return undefined;
+  }
+  const chain = inferExplorerChain(event);
+  if (!chain) {
+    return undefined;
+  }
+  return `https://web3.okx.com/zh-hant/explorer/${chain}/tx/${txRef}`;
+}
+
+function inferExplorerChain(event: RuntimeEvent): string | undefined {
+  const demoChain = event.demoRun?.chain?.trim().toLowerCase();
+  if (demoChain) {
+    return normalizeExplorerChain(demoChain);
+  }
+  if (event.target === "uniswap-v3" || event.target === "pancakeswap-v3") {
+    return "base";
+  }
+  return undefined;
+}
+
+function normalizeExplorerChain(chain: string): string | undefined {
+  if (chain === "base") return "base";
+  if (chain === "xlayer") return "xlayer";
+  if (chain === "bsc" || chain === "bnb") return "bsc";
+  return undefined;
 }
 
 export function createTelegramReportNotifier(
@@ -147,7 +183,11 @@ function callbackSummary(result: Awaited<ReturnType<PhalanxHost["handleTelegramC
       result.runtimeOutcome && "adapterResult" in result.runtimeOutcome
         ? (result.runtimeOutcome.adapterResult as Record<string, unknown>)
         : undefined;
-    if (adapterResult?.mode === "whitelist_governance_completed" && typeof adapterResult.resumedAction === "string") {
+    if (
+      (adapterResult?.mode === "whitelist_governance_completed" ||
+        adapterResult?.mode === "whitelist_local_completed") &&
+      typeof adapterResult.resumedAction === "string"
+    ) {
       return `Approved. Whitelist updated and ${describeRuntimeAction(adapterResult.resumedAction)} resumed.`;
     }
     return "Approved. Action resumed through RuntimeCore and executed.";

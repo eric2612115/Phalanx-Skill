@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 
-import { ConfigStore } from "../config/store.js";
+import { ConfigStore, resolveServiceConfigPath } from "../config/store.js";
 import { writeWhitelistContractAllowance } from "../adapters/whitelist-contract.js";
 import { extractRuntimeTxRefs } from "../runtime/events.js";
 import type { ExecutionAdapter } from "../runtime/core.js";
@@ -61,6 +61,7 @@ function resolveChainTarget(
     stringField(intent.payload, "contractAddress") ??
     stringField(intent.payload, "targetAddress") ??
     stringField(intent.payload, "executionTarget") ??
+    stringField(intent.payload, "poolAddress") ??
     stringField(intent.payload, "target")
   );
 }
@@ -70,7 +71,7 @@ function persistWhitelistTarget(target: string, env: NodeJS.ProcessEnv): void {
   if (!configPath) {
     return;
   }
-  const store = new ConfigStore(resolve(configPath));
+  const store = new ConfigStore(resolveServiceConfigPath(resolve(configPath), env));
   const current = new Set(
     ((store.getSnapshot().values.WHITELIST_TARGETS ?? "").split(",") as string[])
       .map((value) => value.trim())
@@ -80,11 +81,24 @@ function persistWhitelistTarget(target: string, env: NodeJS.ProcessEnv): void {
   store.updateValidated({ WHITELIST_TARGETS: [...current].sort((a, b) => a.localeCompare(b)).join(",") }, () => null);
 }
 
+function governanceWriteConfigured(
+  env: NodeJS.ProcessEnv,
+  hasInjectedWriteImpl: boolean,
+): boolean {
+  if (hasInjectedWriteImpl) {
+    return true;
+  }
+  const ownerKey = (env.POLICY_OWNER_KEY ?? "").trim();
+  const policyAddress = (env.WHITELIST_POLICY_ADDRESS ?? env.PHALANX_WHITELIST_CONTRACT_ADDRESS ?? "").trim();
+  return ownerKey.length > 0 && policyAddress.length > 0;
+}
+
 export function createGovernanceAwareExecutor(
   options: GovernanceAwareExecutorOptions,
 ): ExecutionAdapter {
   const env = options.env ?? process.env;
   const governanceWrite = options.governanceWriteImpl ?? writeWhitelistContractAllowance;
+  const allowChainWrite = governanceWriteConfigured(env, options.governanceWriteImpl !== undefined);
   return {
     async execute(intent: RuntimeIntent): Promise<unknown> {
       if (intent.action !== "requestWhitelistExpansion") {
@@ -93,42 +107,40 @@ export function createGovernanceAwareExecutor(
 
       const policyItemTarget = resolvePolicyItemTarget(intent);
       const chainTarget = resolveChainTarget(intent);
-      const requestedWriteTarget = chainTarget ?? policyItemTarget;
-      if (!requestedWriteTarget) {
+      const localWhitelistTarget = policyItemTarget ?? chainTarget;
+      if (!localWhitelistTarget) {
         return {
           mode: "whitelist_governance_failed",
           summary: "No target was provided for whitelist expansion.",
         };
       }
-
-      const governanceWriteResult = await governanceWrite(requestedWriteTarget, true, env);
-      if (governanceWriteResult.status !== "completed") {
-        return {
-          mode: "whitelist_governance_failed",
-          summary: governanceWriteResult.summary,
-          governanceWrite: governanceWriteResult,
-        };
-      }
-
-      const localWhitelistTarget = policyItemTarget ?? requestedWriteTarget;
       options.whitelistPolicy.addTarget(localWhitelistTarget);
       persistWhitelistTarget(localWhitelistTarget, env);
+
+      const governanceWriteResult =
+        allowChainWrite && chainTarget ? await governanceWrite(chainTarget, true, env) : undefined;
 
       const originalIntent = parseResumeIntent(intent.payload);
       const resumedResult = originalIntent ? await options.baseExecutor.execute(originalIntent) : undefined;
       const txRefs = [
-        ...(governanceWriteResult.txHash ? [governanceWriteResult.txHash] : []),
+        ...(governanceWriteResult?.status === "completed" && governanceWriteResult.txHash
+          ? [governanceWriteResult.txHash]
+          : []),
         ...(resumedResult ? (extractRuntimeTxRefs(resumedResult) ?? []) : []),
       ];
 
       return {
-        mode: "whitelist_governance_completed",
+        mode: governanceWriteResult?.status === "completed" ? "whitelist_governance_completed" : "whitelist_local_completed",
         summary: originalIntent
-          ? "Whitelist updated and the original action resumed."
-          : "Whitelist updated.",
-        governanceWrite: governanceWriteResult,
+          ? governanceWriteResult?.status === "completed"
+            ? "Whitelist updated and the original action resumed."
+            : "Local whitelist updated and the original action resumed."
+          : governanceWriteResult?.status === "completed"
+            ? "Whitelist updated."
+            : "Local whitelist updated.",
+        ...(governanceWriteResult ? { governanceWrite: governanceWriteResult } : {}),
         target: localWhitelistTarget,
-        chainTarget: requestedWriteTarget,
+        chainTarget,
         resumedAction: originalIntent?.action,
         resumedResult,
         txRefs,

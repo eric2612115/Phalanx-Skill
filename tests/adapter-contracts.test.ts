@@ -404,7 +404,9 @@ describe("deploy-whitelist script (contract)", () => {
   it("writeWhitelistPolicyAddressToConfig persists the deployed address", () => {
     const dir = mkdtempSync(join(tmpdir(), "phalanx-whitelist-config-"));
     const configPath = join(dir, "config.env");
+    const servicePath = join(dir, "service.env");
     writeFileSync(configPath, "PHALANX_RUNTIME_MODE=live\n", "utf8");
+    writeFileSync(servicePath, "", "utf8");
 
     const outcome = writeWhitelistPolicyAddressToConfig(
       "0x1111111111111111111111111111111111111111",
@@ -412,9 +414,11 @@ describe("deploy-whitelist script (contract)", () => {
     );
 
     expect(outcome.updated).toBe(true);
-    expect(readFileSync(configPath, "utf8")).toContain(
+    expect(outcome.configPath).toBe(servicePath);
+    expect(readFileSync(servicePath, "utf8")).toContain(
       "WHITELIST_POLICY_ADDRESS=0x1111111111111111111111111111111111111111",
     );
+    expect(readFileSync(configPath, "utf8")).not.toContain("WHITELIST_POLICY_ADDRESS=");
   });
 });
 

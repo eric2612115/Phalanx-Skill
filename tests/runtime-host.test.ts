@@ -166,6 +166,117 @@ describe("runtime host integration", () => {
     });
   });
 
+  it("skill-backed withdrawLpPosition uses Onchain OS discovery hooks then direct NPM withdraw", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const NPM = "0x03a520b32c04bf3beef7beb72e919cf822ed34f1";
+
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      configValues: {
+        PHALANX_EXECUTION_BACKEND: "onchainos_skill",
+        WHITELIST_TARGETS: "uniswap-v3",
+        TEST_WALLET_ADDRESS: "0x3333333333333333333333333333333333333333",
+        PATH: "/definitely/missing",
+      },
+      lpExecutionHooks: {
+        readDefiDetailImpl: async () => ({
+          provider: "onchainos",
+          status: "completed",
+          argv: ["onchainos", "defi", "detail"],
+          summary: "detail completed",
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              investmentId: 326890603,
+              contract: NPM,
+              feeRate: "0.003",
+              underlyingToken: [
+                {
+                  tokenAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  tokenSymbol: "USDC",
+                  isBaseToken: false,
+                },
+                {
+                  tokenAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                  tokenSymbol: "ETH",
+                  isBaseToken: true,
+                },
+              ],
+            },
+          }),
+        }),
+        readDefiPositionDetailImpl: async () => ({
+          provider: "onchainos",
+          status: "completed",
+          argv: ["onchainos", "defi", "position-detail"],
+          summary: "ok",
+          stdout: JSON.stringify({ ok: true, data: { tokenId: "4942499" } }),
+        }),
+        readUniswapPositionImpl: async () => ({
+          nonce: 0n,
+          operator: "0x0000000000000000000000000000000000000000",
+          token0: "0x4200000000000000000000000000000000000006",
+          token1: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          fee: 3000,
+          tickLower: -199560,
+          tickUpper: -199200,
+          liquidity: 3180904181569n,
+          feeGrowthInside0LastX128: 0n,
+          feeGrowthInside1LastX128: 0n,
+          tokensOwed0: 0n,
+          tokensOwed1: 0n,
+        }),
+        nowSecondsImpl: () => 1_775_962_100,
+        runCmdImpl: async (command, args) => {
+          if (args[0] === "wallet" && args[1] === "contract-call") {
+            return {
+              argv: [command, ...args],
+              ok: true,
+              exitCode: 0,
+              stdout: JSON.stringify({ ok: true, data: { txHash: "0xwithdraw" } }),
+              stderr: "",
+            };
+          }
+          if (args[0] === "wallet" && args[1] === "history") {
+            return {
+              argv: [command, ...args],
+              ok: true,
+              exitCode: 0,
+              stdout: JSON.stringify({ ok: true, data: [{ txHash: "0xwithdraw", txStatus: "SUCCESS" }] }),
+              stderr: "",
+            };
+          }
+          throw new Error(`unexpected call ${[command, ...args].join(" ")}`);
+        },
+        delayImpl: async () => {},
+      },
+    });
+
+    const out = await host.invokeMcp("phalanx_action", {
+      action: "withdrawLpPosition",
+      payload: {
+        protocol: "uniswap-v3",
+        investmentId: "326890603",
+        chain: "base",
+        address: "0x3333333333333333333333333333333333333333",
+        platformId: "demo-platform",
+        ratio: "1",
+      },
+      target: "uniswap-v3",
+    });
+
+    expect(out.ok).toBe(true);
+    if (!out.ok) {
+      throw new Error("expected withdraw execution");
+    }
+    expect(out.data.kind).toBe("executed");
+    expect(out.data.adapterResult).toMatchObject({
+      provider: "onchainos",
+      lane: "defi_execute",
+      status: "completed",
+    });
+  });
+
   it("restores READY lifecycle from config when live requirements and owner id are present", async () => {
     const { createPhalanxHost } = await import("../src/app/host.ts");
 
@@ -953,17 +1064,22 @@ describe("runtime host integration", () => {
     expect(host.getTelegramApprovalOutbox()).toHaveLength(0);
   });
 
-  it("routes a blocked Uniswap LP deposit through approval then resumes the LP execution lane", async () => {
+  it("uses LP poolAddress for whitelist governance but keeps the symbolic target locally", async () => {
     const { createPhalanxHost } = await import("../src/app/host.ts");
+    const poolAddress = "0x1111111111111111111111111111111111111111";
+    const governanceWrites: string[] = [];
 
     const host = createPhalanxHost({
       lifecycle: "READY",
       whitelistTargets: ["whitelist-admin"],
-      governanceWriteImpl: async () => ({
-        status: "completed",
-        summary: "whitelist_contract_write_confirmed",
-        txHash: "0xpolicy",
-      }),
+      governanceWriteImpl: async (target) => {
+        governanceWrites.push(target);
+        return {
+          status: "completed",
+          summary: "whitelist_contract_write_confirmed",
+          txHash: "0xpolicy",
+        };
+      },
       executor: {
         execute: async (intent) => ({
           provider: "test",
@@ -982,6 +1098,7 @@ describe("runtime host integration", () => {
         protocol: "uniswap-v3",
         investmentId: "uniswap-base-weth-usdc-v3",
         chain: "base",
+        poolAddress,
         token: "USDC",
         amount: "1000000",
       },
@@ -998,6 +1115,7 @@ describe("runtime host integration", () => {
 
     const resumed = await host.handleTelegramCallback(queued[0]!.approveCallbackData);
     expect(resumed.handled).toBe(true);
+    expect(governanceWrites).toEqual([poolAddress]);
     expect(resumed.runtimeOutcome?.type).toBe("executed");
     if (resumed.runtimeOutcome?.type !== "executed") {
       throw new Error("expected execution");
@@ -1005,9 +1123,80 @@ describe("runtime host integration", () => {
     expect(resumed.runtimeOutcome.adapterResult).toMatchObject({
       mode: "whitelist_governance_completed",
       target: "uniswap-v3",
+      chainTarget: poolAddress,
       resumedAction: "depositLpPosition",
       txRefs: ["0xpolicy", "0xlpdeposit"],
     });
+  });
+
+  it("falls back to local whitelist persistence when on-chain governance is not configured", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      whitelistTargets: ["whitelist-admin"],
+      executor: {
+        execute: async (intent) => ({
+          provider: "test",
+          action: intent.action,
+          target: intent.target,
+          txRefs: ["0xlpdeposit"],
+          summary: `${intent.action} executed`,
+        }),
+      },
+    });
+
+    const first = await host.invokeMcp("phalanx_action", {
+      action: "depositLpPosition",
+      target: "uniswap-v3",
+      payload: {
+        protocol: "uniswap-v3",
+        investmentId: "uniswap-base-weth-usdc-v3",
+        chain: "base",
+        poolAddress: "0x1111111111111111111111111111111111111111",
+        token: "USDC",
+        amount: "1000000",
+      },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok || first.data.kind !== "pending_approval") {
+      throw new Error("expected pending approval");
+    }
+
+    const queued = host.getTelegramApprovalOutbox();
+    expect(queued).toHaveLength(1);
+
+    const resumed = await host.handleTelegramCallback(queued[0]!.approveCallbackData);
+    expect(resumed.handled).toBe(true);
+    expect(resumed.runtimeOutcome?.type).toBe("executed");
+    if (resumed.runtimeOutcome?.type !== "executed") {
+      throw new Error("expected execution");
+    }
+    expect(resumed.runtimeOutcome.adapterResult).toMatchObject({
+      mode: "whitelist_local_completed",
+      target: "uniswap-v3",
+      chainTarget: "0x1111111111111111111111111111111111111111",
+      resumedAction: "depositLpPosition",
+      txRefs: ["0xlpdeposit"],
+    });
+
+    const second = await host.invokeMcp("phalanx_action", {
+      action: "depositLpPosition",
+      target: "uniswap-v3",
+      payload: {
+        protocol: "uniswap-v3",
+        investmentId: "uniswap-base-weth-usdc-v3",
+        chain: "base",
+        poolAddress: "0x1111111111111111111111111111111111111111",
+        token: "USDC",
+        amount: "1000000",
+      },
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) {
+      throw new Error("expected allowlisted execution");
+    }
+    expect(second.data.kind).toBe("executed");
   });
 
   it("routes withdrawToOwner through direct approval without whitelist governance", async () => {

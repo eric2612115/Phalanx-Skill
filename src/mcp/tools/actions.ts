@@ -101,7 +101,7 @@ function preferredContractAddress(
   argsTarget: unknown,
   payload: Readonly<Record<string, unknown>>,
 ): string | undefined {
-  for (const key of ["contractAddress", "targetAddress", "executionTarget"]) {
+  for (const key of ["contractAddress", "targetAddress", "executionTarget", "poolAddress"]) {
     const value = payload[key];
     if (typeof value === "string" && value.trim().length > 0) {
       return value.trim();

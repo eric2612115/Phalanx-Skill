@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { ConfigStore } from "../config/store.js";
+import { ConfigStore, resolveServiceConfigPath } from "../config/store.js";
 import type { RuntimeLifecycleState } from "../runtime/types.js";
 import {
   ownerAlreadyClaimedMessage,
@@ -89,7 +89,11 @@ function defaultConfigPath(): string {
 }
 
 function createDefaultSetupHooks(): SetupHooks {
-  return createConfigBackedSetupHooks(new ConfigStore(defaultConfigPath()));
+  const configPath = defaultConfigPath();
+  return createConfigBackedSetupHooks(
+    new ConfigStore(configPath),
+    new ConfigStore(resolveServiceConfigPath(configPath)),
+  );
 }
 
 export function createSetupSession(options: CreateSetupSessionOptions = {}): SetupSession {
@@ -418,15 +422,31 @@ async function handleSetupInProgress(
 
 export function createConfigBackedSetupHooks(
   configStore: ConfigStore,
+  serviceStore: ConfigStore,
   overrides: Pick<SetupHooks, "validateCapability"> = {},
 ): SetupHooks {
+  const serviceKeys = new Set(["WHITELIST_TARGETS"]);
   return {
     validateCapability: overrides.validateCapability,
     persistOwnerClaim: ({ ownerUserId }) => {
       configStore.updateValidated({ TELEGRAM_ALLOWED_USER_ID: ownerUserId }, () => null);
     },
     persistValidatedStep: ({ values }) => {
-      configStore.updateValidated(values, () => null);
+      const configValues: Record<string, string> = {};
+      const serviceValues: Record<string, string> = {};
+      for (const [key, value] of Object.entries(values)) {
+        if (serviceKeys.has(key)) {
+          serviceValues[key] = value;
+        } else {
+          configValues[key] = value;
+        }
+      }
+      if (Object.keys(configValues).length > 0) {
+        configStore.updateValidated(configValues, () => null);
+      }
+      if (Object.keys(serviceValues).length > 0) {
+        serviceStore.updateValidated(serviceValues, () => null);
+      }
     },
   };
 }

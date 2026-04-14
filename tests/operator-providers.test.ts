@@ -5,7 +5,10 @@ import { fetchOperatorBindingSnapshot } from "../src/operator/providers/binding-
 import { fetchOperatorEventSnapshot } from "../src/operator/providers/event-provider.ts";
 import { fetchOperatorExplainSnapshot } from "../src/operator/providers/explain-provider.ts";
 import { fetchOperatorPolicySnapshot } from "../src/operator/providers/policy-provider.ts";
-import { fetchOperatorPortfolioSnapshot } from "../src/operator/providers/portfolio-provider.ts";
+import {
+  fetchOperatorLpPositionDetailSnapshot,
+  fetchOperatorPortfolioSnapshot,
+} from "../src/operator/providers/portfolio-provider.ts";
 import { fetchOperatorRiskSnapshot } from "../src/operator/providers/risk-provider.ts";
 import { fetchOperatorStatusSnapshot } from "../src/operator/providers/status-provider.ts";
 
@@ -40,6 +43,95 @@ describe("operator providers", () => {
     expect(status.readiness.liveReady).toBe(false);
     expect(status.readiness.demoReady).toBe(false);
     expect(status.surfaces.guardian).toBe("enabled");
+  });
+
+  it("portfolio provider LP detail scope returns pool, ticks, liquidity, in-range, and withdraw summary", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      whitelistTargets: ["pool", "uniswap-v3"],
+      configValues: {
+        PHALANX_EXECUTION_BACKEND: "onchainos_skill",
+        PHALANX_DEFAULT_CHAIN: "base",
+        TEST_WALLET_ADDRESS: "0x3333333333333333333333333333333333333333",
+      },
+      lpExecutionHooks: {
+        resolveExecutionWalletAddressImpl: async () => "0x3333333333333333333333333333333333333333",
+        readDefiPositionsImpl: async (input) => {
+          expect(input.address).toBe("0x3333333333333333333333333333333333333333");
+          expect(input.chain).toBe("base");
+          return {
+            provider: "onchainos",
+            status: "completed",
+            argv: ["onchainos", "defi", "positions"],
+            summary: "positions ok",
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                walletIdPlatformList: [
+                  {
+                    platformList: [
+                      {
+                        platformName: "Uniswap V3",
+                        analysisPlatformId: "plat-uni-1",
+                        currencyAmount: "80",
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          };
+        },
+        readDefiPositionDetailImpl: async (input) => {
+          expect(input.platformId).toBe("plat-uni-1");
+          return {
+            provider: "onchainos",
+            status: "completed",
+            argv: ["onchainos", "defi", "position-detail"],
+            summary: "position detail ok",
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                analysisPlatformId: "plat-uni-1",
+                platformName: "Uniswap V3",
+                walletIdPlatformDetailList: [
+                  {
+                    networkHoldVoList: [
+                      {
+                        investTokenBalanceVoList: [
+                          {
+                            tokenId: "4242",
+                            poolAddress: "0xdeadbeef00000000000000000000000000000001",
+                            tickLower: -100,
+                            tickUpper: 200,
+                            currentTick: 50,
+                            liquidity: "9900112233",
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          };
+        },
+      },
+    });
+
+    const snap = await fetchOperatorLpPositionDetailSnapshot(host);
+    expect(snap.status).toBe("ok");
+    if (snap.status !== "ok") {
+      throw new Error("expected lp detail ok");
+    }
+    expect(snap.poolAddress).toMatch(/^0x/i);
+    expect(snap.tokenId).toBe("4242");
+    expect(snap.tickLower).toBe(-100);
+    expect(snap.tickUpper).toBe(200);
+    expect(snap.liquidity).toBe("9900112233");
+    expect(snap.inRange).toBe(true);
+    expect(snap.withdrawabilitySummary.length).toBeGreaterThan(0);
   });
 
   it("portfolio provider returns normalized summary when portfolio read succeeds", async () => {

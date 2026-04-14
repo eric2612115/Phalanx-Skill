@@ -5,7 +5,7 @@
 
 import { resolve } from "node:path";
 
-import { ConfigStore } from "../src/config/store.js";
+import { ConfigStore, resolveServiceConfigPath } from "../src/config/store.js";
 import {
   buildWhitelistContractLiveConfig,
   parseShellCommandWords,
@@ -41,11 +41,11 @@ export function writeWhitelistPolicyAddressToConfig(
   policyAddress: string,
   configPath = process.env.PHALANX_CONFIG_PATH?.trim() || resolve(process.cwd(), "config.env"),
 ): { updated: boolean; configPath: string } {
-  const store = new ConfigStore(configPath);
+  const store = new ConfigStore(resolveServiceConfigPath(configPath, process.env));
   store.updateValidated({ WHITELIST_POLICY_ADDRESS: policyAddress }, () => null);
   return {
     updated: true,
-    configPath,
+    configPath: resolveServiceConfigPath(configPath, process.env),
   };
 }
 
@@ -104,7 +104,7 @@ export async function runDeployWhitelist(
     script: "deploy-whitelist",
     status: "completed",
     summary: policyAddress
-      ? "Deploy command exited successfully and whitelist policy address was written to config.env"
+      ? "Deploy command exited successfully and whitelist policy address was written to service.env"
       : "Deploy command exited successfully",
     command: cmd,
     exitCode: record.exitCode,

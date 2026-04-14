@@ -1,5 +1,8 @@
 import type { PhalanxHost } from "../../app/host.js";
 import type { PortfolioBucketKind } from "../../adapters/portfolio.js";
+import { OPERATOR_LP_POSITION_DETAIL_SCOPE } from "../../runtime/operator-query-scopes.js";
+
+export { OPERATOR_LP_POSITION_DETAIL_SCOPE };
 
 export interface OperatorPortfolioBucketSummary {
   readonly kind: PortfolioBucketKind | string;
@@ -16,6 +19,23 @@ export type OperatorPortfolioSnapshot =
       readonly lendingHealthScore?: number;
       readonly lpInRange?: boolean;
       readonly lpStrictRange?: boolean;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly code: string;
+      readonly message: string;
+    };
+
+export type OperatorLpPositionDetailSnapshot =
+  | {
+      readonly status: "ok";
+      readonly poolAddress: string;
+      readonly tokenId: string;
+      readonly tickLower: number;
+      readonly tickUpper: number;
+      readonly liquidity: string;
+      readonly inRange: boolean;
+      readonly withdrawabilitySummary: string;
     }
   | {
       readonly status: "unavailable";
@@ -83,4 +103,94 @@ export async function fetchOperatorPortfolioSnapshot(host: PhalanxHost): Promise
     };
   }
   return normalizeExecutedPortfolio(data.adapterResult);
+}
+
+function readStringField(row: Record<string, unknown>, key: string): string | undefined {
+  const v = row[key];
+  if (typeof v === "string" && v.trim().length > 0) {
+    return v.trim();
+  }
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return String(v);
+  }
+  return undefined;
+}
+
+function readIntField(row: Record<string, unknown>, key: string): number | undefined {
+  const v = row[key];
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return v;
+  }
+  if (typeof v === "string" && v.trim().length > 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
+function normalizeLpPositionDetail(adapterResult: unknown): OperatorLpPositionDetailSnapshot {
+  const r = asRecord(adapterResult);
+  if (!r) {
+    return { status: "unavailable", code: "NO_DETAIL", message: "No LP position detail in adapter result." };
+  }
+  if (r.mode === "dry_run") {
+    return { status: "unavailable", code: "DRY_RUN", message: "LP position detail is not available in dry-run mode." };
+  }
+  const detail = asRecord(r.lpPositionDetail);
+  if (!detail) {
+    return { status: "unavailable", code: "MISSING_LP_DETAIL", message: "Adapter did not return lpPositionDetail." };
+  }
+  const poolAddress = readStringField(detail, "poolAddress");
+  const tokenId = readStringField(detail, "tokenId");
+  const tickLower = readIntField(detail, "tickLower");
+  const tickUpper = readIntField(detail, "tickUpper");
+  const liquidity = readStringField(detail, "liquidity");
+  const withdrawabilitySummary = readStringField(detail, "withdrawabilitySummary");
+  const inRange = detail.inRange;
+  if (
+    !poolAddress ||
+    !tokenId ||
+    tickLower === undefined ||
+    tickUpper === undefined ||
+    !liquidity ||
+    typeof inRange !== "boolean" ||
+    !withdrawabilitySummary
+  ) {
+    return {
+      status: "unavailable",
+      code: "INVALID_LP_DETAIL",
+      message: "lpPositionDetail is present but missing required fields.",
+    };
+  }
+  return {
+    status: "ok",
+    poolAddress,
+    tokenId,
+    tickLower,
+    tickUpper,
+    liquidity,
+    inRange,
+    withdrawabilitySummary,
+  };
+}
+
+/**
+ * Single bounded read: active LP NFT / tick range / liquidity / in-range / withdraw hint via portfolio tool payload.
+ */
+export async function fetchOperatorLpPositionDetailSnapshot(host: PhalanxHost): Promise<OperatorLpPositionDetailSnapshot> {
+  const res = await host.invokeMcp("phalanx_portfolio", {
+    payload: { operatorScope: OPERATOR_LP_POSITION_DETAIL_SCOPE },
+  });
+  if (!res.ok) {
+    return { status: "unavailable", code: res.code ?? "UNKNOWN", message: res.message };
+  }
+  const data = res.data as { kind?: string; adapterResult?: unknown };
+  if (data.kind !== "executed") {
+    return {
+      status: "unavailable",
+      code: "UNEXPECTED_OUTCOME",
+      message: `Unexpected portfolio tool outcome: ${String(data.kind ?? "unknown")}`,
+    };
+  }
+  return normalizeLpPositionDetail(data.adapterResult);
 }

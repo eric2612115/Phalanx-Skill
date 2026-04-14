@@ -1,4 +1,5 @@
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 export interface ConfigSnapshot {
   readonly version: number;
@@ -17,7 +18,12 @@ export interface RuntimeReadinessSummary {
    * Prefer {@link operatorReady} and {@link demoReady} for install and operator UX.
    */
   readonly liveReady: boolean;
-  /** Live: Telegram bot + OKX/onchainos credentials + execution wallet baseline. */
+  /**
+   * Live: Telegram bot + OKX credentials + execution wallet bootstrap/runtime-availability signal.
+   * The baseline is satisfied by an explicit env execution address, a non-live rehearsal test wallet,
+   * or OKX-only bootstrap that should let Phalanx attempt managed Agentic Wallet resolution at runtime.
+   * It does not prove that `onchainos wallet addresses` has already succeeded in this process.
+   */
   readonly operatorReady: boolean;
   /** Live: operator tier plus governance, owner EVM binding, and Base RPC for mainline execution. */
   readonly demoReady: boolean;
@@ -68,6 +74,9 @@ const DEFAULT_OMRATE_API_BASE_URL = "https://api.omrate.com";
 /** Official X Layer mainnet JSON-RPC (chain id 196) per OKX developer docs. */
 const DEFAULT_XLAYER_RPC_URL = "https://rpc.xlayer.tech";
 
+/** Stable Base mainnet JSON-RPC for the current direct Uniswap execution lane. */
+const DEFAULT_BASE_RPC_URL = "https://mainnet.base.org";
+
 const OPERATOR_LIVE_REQUIRED_KEYS = [
   "TELEGRAM_BOT_TOKEN",
   "OKX_API_KEY",
@@ -76,8 +85,6 @@ const OPERATOR_LIVE_REQUIRED_KEYS = [
 ] as const;
 
 const DEMO_LIVE_REQUIRED_KEYS = [
-  "POLICY_OWNER_KEY",
-  "WHITELIST_POLICY_ADDRESS",
   "PHALANX_OWNER_EVM_ADDRESS",
   "BASE_RPC_URL",
 ] as const;
@@ -96,6 +103,24 @@ const CONFIG_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
   PHALANX_X402_PRIVATE_KEY: ["OMRATE_X402_BUYER_PRIVATE_KEY"],
   PHALANX_X402_NETWORK: ["OMRATE_X402_NETWORK"],
 };
+
+const CONFIG_DEFAULT_VALUES: Readonly<Record<string, string>> = {
+  OMRATE_API_BASE_URL: DEFAULT_OMRATE_API_BASE_URL,
+  XLAYER_RPC_URL: DEFAULT_XLAYER_RPC_URL,
+  BASE_RPC_URL: DEFAULT_BASE_RPC_URL,
+};
+
+function withRuntimeDefaults(
+  values: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string | undefined>> {
+  const out: Record<string, string | undefined> = { ...values };
+  for (const [key, fallback] of Object.entries(CONFIG_DEFAULT_VALUES)) {
+    if (normalizedRawValue(out[key]) === undefined) {
+      out[key] = fallback;
+    }
+  }
+  return out;
+}
 
 function parseEnvFile(content: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -122,16 +147,42 @@ export function loadRuntimeConfigValues(
   filePath: string,
   baseEnv: Readonly<Record<string, string | undefined>> = process.env,
 ): Readonly<Record<string, string | undefined>> {
+  const servicePath = resolveServiceConfigPath(filePath, baseEnv);
+  const serviceValues = loadEnvFileValues(servicePath);
   try {
     const raw = readFileSync(filePath, "utf8");
-    return {
+    return withRuntimeDefaults({
+      ...serviceValues,
       ...parseEnvFile(raw),
       ...baseEnv,
-    };
+    });
   } catch (e: unknown) {
     const code = e && typeof e === "object" && "code" in e ? (e as NodeJS.ErrnoException).code : undefined;
     if (code === "ENOENT") {
-      return { ...baseEnv };
+      return withRuntimeDefaults({ ...serviceValues, ...baseEnv });
+    }
+    throw e;
+  }
+}
+
+export function resolveServiceConfigPath(
+  configPath: string,
+  baseEnv: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const explicit = normalizedRawValue(baseEnv.PHALANX_SERVICE_CONFIG_PATH);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  return resolve(dirname(configPath), "service.env");
+}
+
+function loadEnvFileValues(filePath: string): Record<string, string | undefined> {
+  try {
+    return parseEnvFile(readFileSync(filePath, "utf8"));
+  } catch (e: unknown) {
+    const code = e && typeof e === "object" && "code" in e ? (e as NodeJS.ErrnoException).code : undefined;
+    if (code === "ENOENT") {
+      return {};
     }
     throw e;
   }
@@ -165,7 +216,7 @@ function normalizedValue(values: Readonly<Record<string, string | undefined>>, k
       return viaAlias;
     }
   }
-  return undefined;
+  return normalizedRawValue(CONFIG_DEFAULT_VALUES[key]);
 }
 
 /** Resolve a config key including documented env aliases (install/check tooling). */
@@ -184,6 +235,10 @@ export function hasOkxBootstrapCredentials(values: Readonly<Record<string, strin
   );
 }
 
+/**
+ * Returns a configured execution address from env only (explicit overrides and rehearsal aliases).
+ * Does not shell out to Onchain OS; use {@link hasExecutionWalletSignal} for live readiness.
+ */
 export function getExecutionWalletAddress(
   values: Readonly<Record<string, string | undefined>>,
 ): string | undefined {
@@ -194,8 +249,17 @@ export function getExecutionWalletAddress(
   );
 }
 
+/**
+ * True when readiness has enough wallet signal to proceed: explicit env pin, rehearsal test wallet,
+ * or (live only) OKX bootstrap credentials that should allow a later managed-wallet lookup through
+ * Onchain OS. This is a bootstrap/runtime-availability check, not proof that address resolution has
+ * already completed successfully.
+ */
 export function hasExecutionWalletSignal(values: Readonly<Record<string, string | undefined>>): boolean {
-  return getExecutionWalletAddress(values) !== undefined;
+  if (getExecutionWalletAddress(values) !== undefined) {
+    return true;
+  }
+  return normalizeRuntimeMode(values.PHALANX_RUNTIME_MODE) === "live" && hasOkxBootstrapCredentials(values);
 }
 
 export function normalizeRuntimeMode(value: string | undefined): RuntimeMode {
@@ -285,10 +349,10 @@ export function buildRuntimeConfig(values: Readonly<Record<string, string | unde
     },
     omrate: {
       apiKey: normalizedValue(values, "OMRATE_API_KEY"),
-      baseUrl: normalizedValue(values, "OMRATE_API_BASE_URL") ?? DEFAULT_OMRATE_API_BASE_URL,
+      baseUrl: normalizedValue(values, "OMRATE_API_BASE_URL"),
     },
     chain: {
-      xlayerRpcUrl: normalizedValue(values, "XLAYER_RPC_URL") ?? DEFAULT_XLAYER_RPC_URL,
+      xlayerRpcUrl: normalizedValue(values, "XLAYER_RPC_URL"),
       baseRpcUrl: normalizedValue(values, "BASE_RPC_URL"),
     },
     whitelist: {

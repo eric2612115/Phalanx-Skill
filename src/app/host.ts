@@ -42,6 +42,7 @@ import {
 } from "../demo/rebalance-flow.js";
 import { buildLpExecutionObserver } from "../demo/observer.js";
 import { executeOmRateQuery } from "../adapters/omrate.js";
+import type { ExecuteLpPositionIntentHooks } from "../adapters/lp-execution.js";
 
 export interface ApprovalOutboxItem {
   readonly approvalId: string;
@@ -90,6 +91,8 @@ export interface CreatePhalanxHostOptions {
   readonly governanceWriteImpl?: typeof writeWhitelistContractAllowance;
   /** Injected for tests; production uses real `npx skills list` and DexScreener fetch. */
   readonly uniswapPlannerHooks?: UniswapPlannerExecutionHooks;
+  /** Optional hooks for Onchain OS–backed LP execution (tests, dry instrumentation). */
+  readonly lpExecutionHooks?: ExecuteLpPositionIntentHooks;
   readonly agenticRebalanceDemo?: {
     readonly enabled: boolean;
     readonly omRatePath: string;
@@ -198,7 +201,11 @@ function pickExecutor(
   }
   const env = configValues as NodeJS.ProcessEnv;
   if ((configValues.PHALANX_EXECUTION_BACKEND ?? "").trim() === "onchainos_skill") {
-    return createSkillBackedExecutor({ env, uniswapPlannerHooks: options.uniswapPlannerHooks });
+    return createSkillBackedExecutor({
+      env,
+      uniswapPlannerHooks: options.uniswapPlannerHooks,
+      lpExecutionHooks: options.lpExecutionHooks,
+    });
   }
   return createDryRunExecutor(env, options.uniswapPlannerHooks);
 }

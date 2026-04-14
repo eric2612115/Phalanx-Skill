@@ -29,6 +29,21 @@ The primary install story for this phase is:
 
 This phase does **not** promise a registry-backed one-command installer.
 
+## Current hackathon positioning
+
+For the current `X Layer Arena` submission, the repo should be understood as:
+
+- a self-custodial, local-first Agentic application
+- built on top of `Onchain OS` as the execution substrate
+- using `OmRate` as the paid intelligence layer
+- using `Uniswap Skill` as the LP planning layer
+
+It should **not** be described as:
+
+- a hosted wallet-control SaaS
+- a replacement for OKX custody/signing infrastructure
+- a generic skill marketplace package
+
 ## Final directory tree diff
 
 ```text

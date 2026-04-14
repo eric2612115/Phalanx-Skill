@@ -72,7 +72,7 @@ function buildNextSteps(
   }
   if (summary.operatorReady && !summary.demoReady) {
     steps.push(
-      "For demo_ready: add POLICY_OWNER_KEY, WHITELIST_POLICY_ADDRESS, PHALANX_OWNER_EVM_ADDRESS, and BASE_RPC_URL.",
+      "For demo_ready: add PHALANX_OWNER_EVM_ADDRESS. Base RPC now uses a fixed default unless you need an override; POLICY_OWNER_KEY + WHITELIST_POLICY_ADDRESS remain optional future on-chain governance inputs.",
     );
   }
   return steps;
@@ -81,9 +81,13 @@ function buildNextSteps(
 export function runOperatorInit(cwd: string): OperatorInitResult {
   const configPath = join(cwd, "config.env");
   const examplePath = join(cwd, "config.env.example");
+  const servicePath = join(cwd, "service.env");
+  const serviceExamplePath = join(cwd, "service.env.example");
   let configCreated = false;
   const configExists = existsSync(configPath);
   const exampleExists = existsSync(examplePath);
+  const serviceExists = existsSync(servicePath);
+  const serviceExampleExists = existsSync(serviceExamplePath);
   let configStatus: ConfigStatus = "existing";
   if (!configExists && exampleExists) {
     copyFileSync(examplePath, configPath);
@@ -91,6 +95,9 @@ export function runOperatorInit(cwd: string): OperatorInitResult {
     configStatus = "created_from_example";
   } else if (!configExists && !exampleExists) {
     configStatus = "missing";
+  }
+  if (!serviceExists && serviceExampleExists) {
+    copyFileSync(serviceExamplePath, servicePath);
   }
   const values = loadRuntimeConfigValues(configPath);
   const summary = summarizeRuntimeReadiness(values);

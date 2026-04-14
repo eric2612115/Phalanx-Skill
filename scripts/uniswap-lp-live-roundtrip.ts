@@ -221,6 +221,7 @@ function deriveWithdrawPayload(
   return {
     protocol: "uniswap-v3",
     investmentId: String(depositPayload.investmentId ?? ""),
+    poolAddress: typeof depositPayload.poolAddress === "string" ? depositPayload.poolAddress : undefined,
     chain: String(depositPayload.chain ?? "base"),
     platformId: platformId || undefined,
     tokenId: tokenId || undefined,
@@ -338,6 +339,31 @@ async function main(): Promise<void> {
     depositPayload,
   };
 
+  const positionsBeforeDeposit = await readOnchainosDefiPositions({
+    address: walletAddress,
+    chains: [chain],
+    chain,
+    env: runtimeEnv,
+  });
+  const beforeBaseIdentifiers = extractOnchainosDefiPositionIdentifiers(
+    (positionsBeforeDeposit as { stdout?: string } | undefined)?.stdout ?? "",
+  );
+  const beforeDetailPlatformId =
+    (runtimeEnv.PHALANX_LP_WITHDRAW_PLATFORM_ID ?? "").trim() || beforeBaseIdentifiers.platformIds[0];
+  let beforeDetailIdentifiers = { platformIds: [] as string[], tokenIds: [] as string[] };
+  if (beforeDetailPlatformId) {
+    const positionDetailBeforeDeposit = await readOnchainosDefiPositionDetail({
+      address: walletAddress,
+      chain,
+      platformId: beforeDetailPlatformId,
+      env: runtimeEnv,
+    });
+    beforeDetailIdentifiers = extractOnchainosDefiPositionIdentifiers(
+      (positionDetailBeforeDeposit as { stdout?: string } | undefined)?.stdout ?? "",
+    );
+  }
+  const beforeTokenIds = new Set([...beforeBaseIdentifiers.tokenIds, ...beforeDetailIdentifiers.tokenIds]);
+
   output.depositActionResult = await host.invokeMcp("phalanx_action", {
     action: handoff.action,
     payload: depositPayload,
@@ -356,28 +382,57 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(output, null, 2));
   }
 
-  output.positionsAfterDeposit = await readOnchainosDefiPositions({
-    address: walletAddress,
-    chains: [chain],
-    chain,
-    env: runtimeEnv,
-  });
-  const baseIdentifiers = extractOnchainosDefiPositionIdentifiers(
-    (output.positionsAfterDeposit as { stdout?: string } | undefined)?.stdout ?? "",
-  );
-  const detailPlatformId = (runtimeEnv.PHALANX_LP_WITHDRAW_PLATFORM_ID ?? "").trim() || baseIdentifiers.platformIds[0];
-  if (detailPlatformId) {
-    output.positionDetailAfterDeposit = await readOnchainosDefiPositionDetail({
+  const explicitWithdrawTokenId = (runtimeEnv.PHALANX_LP_WITHDRAW_TOKEN_ID ?? "").trim();
+  let baseIdentifiers = { platformIds: [] as string[], tokenIds: [] as string[] };
+  let detailIdentifiers = { platformIds: [] as string[], tokenIds: [] as string[] };
+  let detailPlatformId = (runtimeEnv.PHALANX_LP_WITHDRAW_PLATFORM_ID ?? "").trim();
+  let newTokenId = "";
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    output.positionsAfterDeposit = await readOnchainosDefiPositions({
       address: walletAddress,
+      chains: [chain],
       chain,
-      platformId: detailPlatformId,
       env: runtimeEnv,
     });
+    baseIdentifiers = extractOnchainosDefiPositionIdentifiers(
+      (output.positionsAfterDeposit as { stdout?: string } | undefined)?.stdout ?? "",
+    );
+    detailPlatformId = detailPlatformId || baseIdentifiers.platformIds[0] || "";
+    if (detailPlatformId) {
+      output.positionDetailAfterDeposit = await readOnchainosDefiPositionDetail({
+        address: walletAddress,
+        chain,
+        platformId: detailPlatformId,
+        env: runtimeEnv,
+      });
+      detailIdentifiers = extractOnchainosDefiPositionIdentifiers(
+        (output.positionDetailAfterDeposit as { stdout?: string } | undefined)?.stdout ?? "",
+      );
+    }
+    newTokenId =
+      detailIdentifiers.tokenIds.find((tokenId) => !beforeTokenIds.has(tokenId)) ||
+      baseIdentifiers.tokenIds.find((tokenId) => !beforeTokenIds.has(tokenId)) ||
+      "";
+    if (explicitWithdrawTokenId || newTokenId) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5000));
   }
-  const detailIdentifiers = extractOnchainosDefiPositionIdentifiers(
-    (output.positionDetailAfterDeposit as { stdout?: string } | undefined)?.stdout ?? "",
+  if (!explicitWithdrawTokenId && !newTokenId) {
+    throw new Error("Deposit did not produce a new LP tokenId; refusing to withdraw an existing position.");
+  }
+  output.derivedWithdrawPayload = deriveWithdrawPayload(
+    depositPayload,
+    {
+      ...baseIdentifiers,
+      tokenIds: explicitWithdrawTokenId ? baseIdentifiers.tokenIds : newTokenId ? [newTokenId] : [],
+    },
+    {
+      ...detailIdentifiers,
+      tokenIds: explicitWithdrawTokenId ? detailIdentifiers.tokenIds : newTokenId ? [newTokenId] : [],
+    },
+    runtimeEnv,
   );
-  output.derivedWithdrawPayload = deriveWithdrawPayload(depositPayload, baseIdentifiers, detailIdentifiers, runtimeEnv);
 
   output.withdrawActionResult = await host.invokeMcp("phalanx_action", {
     action: "withdrawLpPosition",

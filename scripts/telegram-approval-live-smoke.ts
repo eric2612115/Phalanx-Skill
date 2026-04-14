@@ -133,12 +133,21 @@ async function main(): Promise<void> {
     ).runtimeDownstream ?? {};
   const action = downstream.executionAction ?? "depositLpPosition";
   const target = downstream.executionTarget ?? "uniswap-v3";
+  const investmentId =
+    process.env.PHALANX_LP_INVESTMENT_ID ??
+    process.env.PHALANX_SMOKE_LP_INVESTMENT_ID ??
+    (downstream.payloadTemplate?.investmentId as string | undefined);
+  const tickLower =
+    process.env.PHALANX_LP_TICK_LOWER ??
+    process.env.PHALANX_SMOKE_LP_TICK_LOWER ??
+    (downstream.payloadTemplate?.tickLower as string | undefined);
+  const tickUpper =
+    process.env.PHALANX_LP_TICK_UPPER ??
+    process.env.PHALANX_SMOKE_LP_TICK_UPPER ??
+    (downstream.payloadTemplate?.tickUpper as string | undefined);
   const payload = {
     ...(downstream.payloadTemplate ?? {}),
-    investmentId:
-      process.env.PHALANX_LP_INVESTMENT_ID ??
-      process.env.PHALANX_SMOKE_LP_INVESTMENT_ID ??
-      ((downstream.payloadTemplate?.investmentId as string | undefined) || "uniswap-base-weth-usdc-v3"),
+    investmentId,
     amount:
       process.env.PHALANX_LP_AMOUNT ??
       process.env.PHALANX_SMOKE_LP_AMOUNT ??
@@ -151,6 +160,8 @@ async function main(): Promise<void> {
       process.env.PHALANX_LP_TOKEN_SECONDARY ??
       process.env.PHALANX_SMOKE_LP_TOKEN_SECONDARY ??
       ((downstream.payloadTemplate?.tokenSecondary as string | undefined) || "ETH"),
+    tickLower,
+    tickUpper,
     range:
       process.env.PHALANX_LP_RANGE ??
       process.env.PHALANX_SMOKE_LP_RANGE ??

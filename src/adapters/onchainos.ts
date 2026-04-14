@@ -763,6 +763,165 @@ function normalizeOnchainosWalletChain(chain: string): string {
   return chainAliases[chain.trim().toLowerCase()] ?? chain;
 }
 
+function isEvmAddress(value: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(value.trim());
+}
+
+function normalizeParsedWalletChainKey(value: string | number | undefined): string | undefined {
+  if (typeof value === "number") {
+    return normalizeOnchainosWalletChain(String(value));
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? normalizeOnchainosWalletChain(trimmed) : undefined;
+  }
+  return undefined;
+}
+
+function recordChainAddress(
+  chainKey: string | undefined,
+  address: string | undefined,
+  byChain: Map<string, string>,
+): void {
+  if (!chainKey || !address || !isEvmAddress(address)) {
+    return;
+  }
+  const normalizedKey = normalizeParsedWalletChainKey(chainKey);
+  if (!normalizedKey) {
+    return;
+  }
+  if (!byChain.has(normalizedKey)) {
+    byChain.set(normalizedKey, address.trim());
+  }
+}
+
+function walkForChainIndexedAddresses(value: unknown, byChain: Map<string, string>): void {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      walkForChainIndexedAddresses(item, byChain);
+    }
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  const chainRaw = record.chainIndex ?? record.chainId ?? record.chain_id;
+  const addrRaw = record.address ?? record.evmAddress ?? record.walletAddress ?? record.accountAddress;
+  const chainKey = normalizeParsedWalletChainKey(
+    typeof chainRaw === "number" || typeof chainRaw === "string" ? chainRaw : undefined,
+  );
+  const address = typeof addrRaw === "string" ? addrRaw.trim() : undefined;
+  recordChainAddress(chainKey, address, byChain);
+  for (const child of Object.values(record)) {
+    walkForChainIndexedAddresses(child, byChain);
+  }
+}
+
+/**
+ * Parses `onchainos wallet addresses` JSON stdout and returns the EVM address for the requested chain.
+ * Accepts common `ok/data` CLI shapes and nested `chainIndex` + `address` pairs.
+ */
+export function parseOnchainosWalletAddressesStdout(stdout: string, chain: string): string | null {
+  const targetChainId = normalizeOnchainosWalletChain(chain);
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    const root = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    const data = root.data;
+    const byChain = new Map<string, string>();
+    walkForChainIndexedAddresses(data, byChain);
+    const exactMatch = byChain.get(targetChainId);
+    if (exactMatch) {
+      return exactMatch;
+    }
+    const direct =
+      data && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : null;
+    let directAddress: string | null = null;
+    if (direct) {
+      for (const key of ["evmAddress", "address", "walletAddress", "accountAddress"] as const) {
+        const raw = direct[key];
+        if (typeof raw === "string" && isEvmAddress(raw)) {
+          directAddress = raw.trim();
+          break;
+        }
+      }
+    }
+    if (byChain.size === 1) {
+      return [...byChain.values()][0] ?? null;
+    }
+    return directAddress;
+  } catch {
+    return null;
+  }
+}
+
+export async function readOnchainosManagedWalletAddress(input: {
+  readonly chain: string;
+  readonly timeoutMs?: number;
+  readonly env?: NodeJS.ProcessEnv;
+}): Promise<string | null> {
+  const chainArg = normalizeOnchainosWalletChain(input.chain);
+  const argv = ["onchainos", "wallet", "addresses", "--chain", chainArg];
+  const [command, ...args] = argv;
+  const mergedEnv = {
+    ...process.env,
+    ...(input.env ?? process.env),
+    ...buildOnchainosRuntimeEnv(input.env ?? process.env),
+  };
+  const result = await runCmd(command, args, input.timeoutMs ?? 60_000, mergedEnv);
+  if (result.spawnError?.code === "ENOENT") {
+    return null;
+  }
+  if (!result.ok) {
+    return null;
+  }
+  return parseOnchainosWalletAddressesStdout(result.stdout, input.chain);
+}
+
+export type ResolvePhalanxExecutionWalletAddressInput = {
+  readonly env: NodeJS.ProcessEnv;
+  readonly chain: string;
+};
+
+export type ResolvePhalanxExecutionWalletAddressHooks = {
+  readonly readManagedWalletAddress?: (
+    input: ResolvePhalanxExecutionWalletAddressInput,
+  ) => Promise<string | null>;
+};
+
+/**
+ * Resolves the wallet used for onchainos-backed execution.
+ * - Explicit `PHALANX_WALLET_ADDRESS` / `AGENT_WALLET_ADDRESS` always win (troubleshooting override).
+ * - Otherwise uses `onchainos wallet addresses` for the requested chain when available.
+ * - In non-live mode, falls back to `TEST_WALLET_ADDRESS` when no override and no managed address.
+ */
+export async function resolvePhalanxExecutionWalletAddress(
+  input: ResolvePhalanxExecutionWalletAddressInput,
+  hooks: ResolvePhalanxExecutionWalletAddressHooks = {},
+): Promise<string | undefined> {
+  const override =
+    (input.env.PHALANX_WALLET_ADDRESS ?? "").trim() || (input.env.AGENT_WALLET_ADDRESS ?? "").trim() || undefined;
+  if (override) {
+    return override;
+  }
+  const readManaged =
+    hooks.readManagedWalletAddress ??
+    ((inp: ResolvePhalanxExecutionWalletAddressInput) =>
+      readOnchainosManagedWalletAddress({ chain: inp.chain, env: inp.env }));
+  const managed = await readManaged(input);
+  if (managed) {
+    return managed;
+  }
+  const runtimeMode = (input.env.PHALANX_RUNTIME_MODE ?? "").trim().toLowerCase();
+  if (runtimeMode === "live") {
+    return undefined;
+  }
+  const test = (input.env.TEST_WALLET_ADDRESS ?? "").trim();
+  return test || undefined;
+}
+
 export function buildOnchainosContractCallCommand(input: {
   readonly chain: string;
   readonly from: string;
@@ -982,6 +1141,40 @@ export function extractOnchainosDefiPositionIdentifiers(stdout: string): Onchain
       tokenIds: [],
     };
   }
+}
+
+export type ResolvedLpNftTokenId =
+  | { readonly ok: true; readonly tokenId: string }
+  | {
+      readonly ok: false;
+      readonly code: "LP_TOKEN_ID_DISCOVERY_EMPTY" | "LP_TOKEN_ID_DISCOVERY_AMBIGUOUS";
+      readonly summary: string;
+    };
+
+/**
+ * Picks a single Uniswap-style NFT `tokenId` from identifiers extracted from Onchain OS JSON.
+ * Ambiguity is surfaced explicitly so callers do not silently pick the wrong position.
+ */
+export function resolveLpNftTokenIdFromIdentifiers(identifiers: OnchainosDefiPositionIdentifiers): ResolvedLpNftTokenId {
+  const unique = [...new Set(identifiers.tokenIds.map((id) => id.trim()).filter((id) => id.length > 0))];
+  if (unique.length === 0) {
+    return {
+      ok: false,
+      code: "LP_TOKEN_ID_DISCOVERY_EMPTY",
+      summary:
+        "Onchain OS response did not include an NFT tokenId for this LP position; provide payload.tokenId explicitly.",
+    };
+  }
+  if (unique.length > 1) {
+    return {
+      ok: false,
+      code: "LP_TOKEN_ID_DISCOVERY_AMBIGUOUS",
+      summary: `Multiple NFT tokenIds (${unique.join(
+        ", ",
+      )}); provide payload.platformId for position-detail discovery or set payload.tokenId.`,
+    };
+  }
+  return { ok: true, tokenId: unique[0]! };
 }
 
 /**

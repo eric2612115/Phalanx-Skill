@@ -1,6 +1,10 @@
 # Live Demo Runbook
 
-This runbook verifies the current installable Phalanx operator package on a single machine.
+This runbook is for the current hackathon-facing local operator demo. The primary recording target is a stable `deposit` live mainline, and the full `deposit -> tokenId discovery -> withdraw` roundtrip is now also live-closed.
+
+Recording checklist:
+
+- `docs/hackathon/xlayer-demo-checklist.md`
 
 ## 1. Install And Bootstrap
 
@@ -14,62 +18,53 @@ npm run init
 Expected init behavior:
 
 - creates `config.env` from `config.env.example` when missing
+- creates `service.env` from `service.env.example` when missing
 - reports `operator_ready`, `demo_ready`, or partial readiness
-- separates operator-tier missing values from optional values
-- treats `OMRATE_API_KEY` as optional because x402 is the baseline once the agent wallet is ready
-- tells the operator to privately message the bot and run `/claim`
+- separates required values from optional ones
+- treats `OMRATE_API_KEY` as optional
+- points the operator to the private Telegram `/claim` step
 
 ## 2. Prepare `config.env`
 
-Operator-ready minimum fields for real live mode:
+Live operator minimum:
 
-- `PHALANX_RUNTIME_MODE=live`
 - `TELEGRAM_BOT_TOKEN`
 - `OKX_API_KEY`
 - `OKX_API_SECRET`
 - `OKX_API_PASSPHRASE`
-- `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS`
-
-Demo-ready additions:
-
-- `POLICY_OWNER_KEY`
-- `WHITELIST_POLICY_ADDRESS`
 - `PHALANX_OWNER_EVM_ADDRESS`
-- `BASE_RPC_URL`
 
-Optional:
+`config.env` is user-facing only:
 
-- `OMRATE_API_KEY`
-- `PHALANX_ENABLE_MCP_STDIO=1`
-- `PHALANX_GUARDIAN_ENABLED=1`
-- `PHALANX_GUARDIAN_INTERVAL_MS=60000`
-- `PHALANX_EVENT_STORE_PATH=.phalanx-runtime-events.json`
-- x402 / Uniswap / Pancake env values for payment and LP quote/read paths
-- `PHALANX_BASE_GAS_RESERVE_WEI`
-- `PHALANX_XLAYER_GAS_RESERVE_WEI`
+- `TELEGRAM_ALLOWED_USER_ID` is auto-written after the first successful private `/claim`
+- `OMRATE_API_KEY` is optional
 
-Fixed / auto-persisted behavior:
+`service.env` owns service/runtime defaults:
 
-- `TELEGRAM_ALLOWED_USER_ID` is written automatically after the first successful private `/claim`
 - `OMRATE_API_BASE_URL` defaults to `https://api.omrate.com`
+- `BASE_RPC_URL` defaults to `https://mainnet.base.org`
 - `XLAYER_RPC_URL` defaults to `https://rpc.xlayer.tech`
+- `PHALANX_RUNTIME_MODE`, guardian flags, execution backend, whitelist targets, and governance write keys live there
+- `POLICY_OWNER_KEY` and `WHITELIST_POLICY_ADDRESS` are future extensions, not current demo blockers
 
-`TEST_WALLET_ADDRESS` is now a dry-run / synthetic fallback only. Real live execution should point at the current OKX Agentic Wallet via `AGENT_WALLET_ADDRESS` or `PHALANX_WALLET_ADDRESS`.
+Wallet note:
 
-For the main demo lane, treat LP decision data as runtime discovery, not operator prefill. `PHALANX_LP_*` values below belong to the dedicated roundtrip proof script, not to the Guardian/x402/planner mainline.
+- the repo is moving toward `Onchain OS` managed-address-first selection
+- some live paths may still require explicit wallet env override until that cleanup is fully finished
+- if a path fails because it selects the wrong `from` address, treat that as a wallet-resolution/config issue, not a proof that LP execution is broken
 
-## 3. Re-run installer review before host-side third-party use
+## 3. Re-run Third-Party Review Before Host Installation
 
 ```bash
 npm run review:docker:all
 ```
 
-Compare against:
+Reference:
 
 - `docs/third-party-install-review.md`
 - `docs/third-party-review-baseline.md`
 
-## 4. Run startup smoke
+## 4. Basic Startup Verification
 
 ```bash
 npm run smoke:live
@@ -78,36 +73,24 @@ npm run smoke:live
 Expected:
 
 - startup summary prints `mode`
-- readiness shows `operatorReady` / `demoReady` aligned state
-- `phalanx_status` path returns successfully
+- readiness reflects the current operator/demo state
+- `phalanx_status` succeeds
 
-## 4.5 Fund the Agentic Wallet before real execution
-
-Before any real live execution:
-
-1. transfer a small amount of test funds into the OKX Agentic Wallet address
-2. confirm the active wallet and balances with `onchainos wallet balance`
-3. only then continue to LP / x402 / owner-withdraw live checks
-
-## 5. Verify orchestration path without real funds
+For synthetic readiness verification:
 
 ```bash
 PHALANX_SMOKE_SYNTHETIC_READY=1 npm run smoke:live
 ```
 
-Expected:
+## 5. Fund The Agentic Wallet Before Real Execution
 
-- portfolio path executes
-- Guardian demo mode can emit a proactive proposal-style Telegram report before approval/execution
-- `phalanx_uniswap_liquidity_plan` returns planner evidence plus `runtimeDownstream.executionAction=depositLpPosition`
-- smoke output includes an LP observer/validator view of planner downstream readiness instead of backfilling `PHALANX_LP_*`
-- blocked `depositLpPosition` on `uniswap-v3` returns `pending_approval` only when the planner downstream is already execution-ready
-- when approval is requested, callback resumes the LP execution lane through `RuntimeCore`
-- `withdrawToOwner` also returns `pending_approval` and resumes after callback
-- smoke output includes `skillReadiness` for `onchainos`, `Uniswap liquidity-planner` discovery/plan, and `uniswapPlannerExecution` (official `SKILL.md` load + validation when `PHALANX_UNISWAP_SKILL_ROOT` points at an installed `Uniswap/uniswap-ai` tree)
-- smoke output also includes a `pancakeswapOnchainos` capability probe so Pancake LP support can be assessed without changing the main demo line
+Before any real live LP execution:
 
-## 6. Start runtime host
+1. transfer a small amount of test funds into the active OKX Agentic Wallet address
+2. confirm balances with `onchainos wallet balance`
+3. only then continue to planner / approval / LP execution rehearsal
+
+## 6. Start The Runtime
 
 Without MCP stdio:
 
@@ -121,11 +104,9 @@ With MCP stdio enabled:
 PHALANX_ENABLE_MCP_STDIO=1 npm run dev
 ```
 
-Note: when MCP stdio is enabled, startup output is written to `stderr` to avoid corrupting the MCP protocol stream.
+When MCP stdio is enabled, startup output goes to `stderr` to avoid corrupting the protocol stream.
 
-`PHALANX_GUARDIAN_ENABLED` is read from the merged runtime config, so setting it in `config.env` is sufficient.
-
-## 7. Real Telegram verification
+## 7. Real Telegram Verification
 
 When `TELEGRAM_BOT_TOKEN` is valid and `PHALANX_RUNTIME_MODE=live`:
 
@@ -133,7 +114,7 @@ When `TELEGRAM_BOT_TOKEN` is valid and `PHALANX_RUNTIME_MODE=live`:
 2. send a private message to the bot
 3. complete owner claim if not already bound
 4. verify approval messages arrive in the same private chat
-5. verify these bounded operator questions work after `READY`:
+5. verify bounded operator queries such as:
    - `status`
    - `portfolio`
    - `recent events`
@@ -142,29 +123,71 @@ When `TELEGRAM_BOT_TOKEN` is valid and `PHALANX_RUNTIME_MODE=live`:
    - `risk summary`
    - `agent wallet`
 
-## 8. Real onchainos / OmRate / whitelist / LP verification
+## 8. Main Recording Story
 
-Run these incrementally with test wallets and small amounts already deposited into the Agentic Wallet:
+For today's recording, the preferred story is:
 
-1. onchainos capability probe and confirm `payment x402-pay` / `swap execute` are present
-2. portfolio read
-3. whitelist live check
-4. whitelist expansion for the blocked `uniswap-v3` LP route -> Telegram approval -> callback resume
-5. OmRate free path
-6. OmRate x402-enabled path, ideally with `onchainos payment x402-pay` as the proof surface
-7. Uniswap planner readiness check and downstream LP payload handoff into `depositLpPosition`
-8. owner withdraw path: `withdrawToOwner` or `sweepToOwner` -> Telegram approval -> callback resume
-9. only then attempt a tiny live execution
+1. show local/self-hosted runtime startup
+2. show the LP action path or MCP-triggered deposit path
+3. show Telegram approval
+4. approve in Telegram
+5. show local-first whitelist update and runtime resume
+6. show live `approve -> deposit`
+7. show returned tx refs
 
-### 8.1 Uniswap LP roundtrip checklist
+What is already proven:
 
-Use the dedicated live roundtrip script when you want a replayable proof bundle:
+- Telegram approval request delivery
+- Telegram approve callback
+- resume through `RuntimeCore`
+- local whitelist update
+- correct pool selection after planner fixes
+- live Uniswap V3 deposit through `onchainos wallet contract-call`
+- successful tx refs
+
+What is still optional for the recording cut:
+
+- rich LP NFT operator report in Telegram
+
+### Deposit mainline smoke (JSON proof)
+
+For a single command that follows the same host and Telegram approval wiring as `smoke:telegram-approval`, runs planner then `phalanx_action` deposit, and prints a machine-readable envelope for recordings:
+
+```bash
+npm run smoke:deposit-mainline
+```
+
+Expected top-level fields include:
+
+- `mode`: always `deposit_mainline_smoke`
+- `schemaVersion`: bump when the envelope shape changes
+- `proof.milestones`: booleans for approval and deposit phases (`approval_requested`, `approval_resumed`, `deposit_attempted`, `deposit_completed`, `tx_refs_captured`)
+- `proof.txRefs`: deduped tx refs when the adapter exposes them
+- `proof.humanSummary`: compact pipe-separated milestone line for logs
+
+Contract tests live in `tests/smoke-deposit-mainline.test.ts`. Requires the same live + Telegram readiness as other approval smokes; approve in Telegram when the script waits on a pending approval.
+
+## 9. Real Onchain OS / OmRate / Uniswap Verification
+
+Run incrementally with small funds:
+
+1. confirm `onchainos` capability and active wallet selection
+2. verify Telegram approval path
+3. verify planner selects the intended pool
+4. confirm blocked LP route becomes `pending_approval`
+5. approve in Telegram
+6. confirm callback resumes the original action
+7. confirm live deposit completes and returns tx refs
+
+## 10. Uniswap LP Roundtrip Script
+
+Use the dedicated roundtrip script when you want the full live lifecycle proof:
 
 ```bash
 npm run smoke:uniswap-lp-roundtrip
 ```
 
-Required env before running the dedicated roundtrip script:
+Required env:
 
 - `PHALANX_LP_INVESTMENT_ID`
 - `PHALANX_LP_AMOUNT`
@@ -178,187 +201,70 @@ Optional env:
 - `PHALANX_LP_TOKEN_A`, `PHALANX_LP_TOKEN_B`
 - `PHALANX_LP_TOKEN`
 - `PHALANX_LP_TOKEN_SECONDARY`
-- `PHALANX_LP_AMOUNT_SECONDARY`
 - `PHALANX_LP_DISCOVERY_PAGES`
 - `PHALANX_LP_WITHDRAW_PLATFORM_ID`
 - `PHALANX_LP_WITHDRAW_TOKEN_ID`
 - `PHALANX_LP_WITHDRAW_RATIO`
 - `PHALANX_LP_WITHDRAW_AMOUNT`
-- `PHALANX_LP_RANGE` as planner-only context
+- `PHALANX_LP_RANGE`
 
 Interpretation rules:
 
-1. `phalanx_uniswap_liquidity_plan` is the planning source of truth for pool candidates and suggested range context
-2. `onchainos defi list` / `positions` / `position-detail` are the execution-time discovery sources for `investmentId`, `platformId`, and `tokenId`
-3. no local metadata cache is used in this round; before withdraw, refresh identifiers from `onchainos`
+1. planning still comes from `phalanx_uniswap_liquidity_plan`
+2. live execution-time identifiers should be refreshed from `onchainos`
+3. no stale local LP metadata should be trusted for withdraw
 4. operator-supplied LP amounts must already be in minimal units
-5. live Uniswap V3 execution on Base now uses direct `NonfungiblePositionManager` calldata through `onchainos wallet contract-call`, not the default high-level `onchainos defi invest/withdraw` LP route
+5. live Uniswap V3 on Base uses direct `NonfungiblePositionManager` calldata through `onchainos wallet contract-call`
 
-For the broader product demo:
+Reference:
 
-1. pool choice should come from paid OmRate data plus planner output
-2. swap need should come from current wallet holdings vs selected LP shape
-3. `PHALANX_LP_*` should be considered override/debug inputs, not the primary demo control surface
+- `docs/uniswap-v3-direct-execution.md`
 
-Judge-facing explanation:
+## 11. Evidence Checklist
 
-- reference note: `docs/uniswap-v3-direct-execution.md`
-- keep this note in the demo packet so reviewers understand this is a deliberate integration fix, not an omitted feature
+Capture these artifacts during rehearsal or recording:
 
-Expected evidence from the script:
+- startup summary showing mode and readiness
+- Telegram approval screenshot for the blocked LP action
+- terminal evidence for resumed execution
+- tx refs from the live deposit
+- planner/pool-selection evidence used in the explanation
+- any runtime event snippet that shows the action resumed through the runtime rather than a side channel
 
-- planner output with downstream payload template
-- product discovery pages scanned against the requested `investmentId`
-- deposit action result and Telegram callback result
-- post-deposit positions / position-detail output
-- derived withdraw payload
-- withdraw action result and Telegram callback result
-- post-withdraw positions / position-detail output
+If `withdraw` is also completed, capture:
 
-## 9. Productization gates before demo
+- post-deposit discovery output
+- derived withdraw payload evidence
+- withdraw result and post-withdraw state
 
-Confirm all of the following before recording or presenting:
+## 12. Recommended Verification Before Recording
 
-1. `ExecutionCoordinator` is the shared multi-step engine for `contract-call -> tx progress polling -> next step`
-2. Guardian emits runtime events and terminal guardian outcomes can produce Telegram execution reports
-3. non-whitelisted execution routes into governance approval, updates runtime whitelist state, and can resume the original action
-4. MCP registration, dispatch, approval flow, host integration, and parser contracts are covered by automated tests
-
-Recommended verification command:
+Run at least:
 
 ```bash
-npm test -- tests/execution-coordinator.test.ts tests/guardian-cycle.test.ts tests/mcp-approval-flow.test.ts tests/transport-live.test.ts tests/runtime-host.test.ts tests/adapter-contracts.test.ts
+npm test -- tests/uniswap-v3-execution.test.ts tests/uniswap-official-planner.test.ts
+npm run build
+npm run guard:ai
 ```
 
-## 10. Demo script
+If the local environment supports it, also run:
 
-For the short-term governance demo, prefer fixed policy items over raw address prompts:
+```bash
+npm run smoke:live
+```
 
-- `aave-v3`
-- `morpho-vaults`
-- `uniswap-v3`
-- `pancakeswap-v3`
-- `whitelist-admin`
+## 13. Fallback Paths
 
-When an execution path needs a concrete address, keep that address in the payload or adapter mapping, but keep the user-facing approval text centered on the policy item.
+Use these fallback modes when dependencies are flaky:
 
-### Segment A: autonomous rebalance
+- if Telegram is temporarily unavailable, prove the approval outbox and callback path locally before retrying the live chat
+- if planner dependencies are partially unavailable, show planner readiness/probe evidence before retrying execution
+- if wallet selection chooses the wrong address, fix config/address resolution first and do not mislabel it as an LP logic failure
+- if `withdraw` is not stable in time, keep the recorded story focused on the already-proven deposit mainline
 
-Goal:
-
-- show Guardian creating an execution intent
-- show RuntimeCore event stages
-- show Telegram post-execution report with reason, risk note, and tx refs
-
-Suggested setup:
-
-1. start runtime with `PHALANX_GUARDIAN_ENABLED=1`
-2. feed a portfolio snapshot or synthetic guardian cycle with drift above threshold
-3. confirm event log shows `guardian_detected -> intent_received -> executed`
-4. show Telegram report text and tx refs
-
-Expected talking points:
-
-- execution is autonomous only because the relevant policy items are already allowlisted, such as `aave-v3` and `morpho-vaults`
-- the report is post-action, not pre-approval
-- the reason and risk notes come from the structured runtime event model, not ad-hoc log scraping
-
-### Segment B: x402 inside the flow
-
-Goal:
-
-- show OmRate/x402 settlement as part of the same runtime narrative, not as a separate toy step
-
-Suggested evidence:
-
-1. trigger the OmRate path that requires payment
-2. capture the x402 settlement proof and resulting runtime summary
-3. keep this as a short insert inside the rebalance or market-query flow
-
-### Segment C: non-allowlisted action -> governance -> continue
-
-Goal:
-
-- show a non-allowlisted policy item being stopped by policy
-- show Telegram approval request
-- show whitelist contract write and resumed execution
-
-Suggested setup:
-
-1. invoke `phalanx_uniswap_liquidity_plan` first and capture `runtimeDownstream.payloadTemplate`
-2. invoke `phalanx_action` with `action=depositLpPosition`, `target=uniswap-v3`, and a filled-in payload template
-3. confirm MCP returns `pending_approval`
-4. approve in Telegram
-5. confirm callback summary says the `uniswap-v3` policy item was widened and the LP add-liquidity action resumed
-6. invoke the same `depositLpPosition` action again and confirm it executes without another approval
-7. keep `pancakeswap-v3` as a secondary capability probe rather than the main blocked demo target
-8. if you need real-chain closure instead of governance-only proof, run `npm run smoke:uniswap-lp-roundtrip` after the approval path is confirmed
-
-### Segment D: funds return to owner
-
-Goal:
-
-- show that funds can be returned from the active Agentic Wallet to the fixed owner wallet
-- show this path is approval-gated and separate from whitelist governance
-
-Suggested setup:
-
-1. invoke `phalanx_action` with `action=withdrawToOwner` or `action=sweepToOwner`
-2. confirm MCP returns `pending_approval`
-3. approve in Telegram
-4. confirm callback resumes owner withdrawal directly, without any whitelist expansion
-5. confirm gas reserve remains on-chain after `sweepToOwner`
-
-## 11. Evidence checklist
-
-Capture these artifacts during the demo rehearsal:
-
-- startup summary showing `mode`, readiness, and guardian surface state
-- test output from the productization regression suite
-- Telegram approval screenshot for blocked `Uniswap LP add liquidity`
-- roundtrip script JSON output containing requested `investmentId`, scanned discovery pages, and derived withdraw identifiers
-- Telegram approval screenshot for `withdraw to owner` or `sweep to owner`
-- Telegram execution report screenshot for guardian execution
-- tx hashes or synthetic governance refs for whitelist write and resumed execution
-- event log snippet showing correlated `intentId` / `correlationId`
-- Uniswap planner evidence showing official skill discovery plus downstream runtime target/action/payload template
-- x402 settlement line or proof artifact
-- proof that the same `uniswap-v3` LP action executes without another approval after the policy item is widened
-- proof that LP withdraw identifiers were refreshed from `onchainos positions` / `position-detail` rather than a stale local cache
-- proof that owner withdrawal uses direct approval rather than whitelist governance
-
-## 12. Validation gates
-
-### Short-term demo ready
-
-- fixed policy items are the user-facing governance subject
-- `uniswap-v3` LP is blocked before approval and resumes after approval
-- `pancakeswap-v3` remains on the same LP execution interface and is probed separately for live capability
-- owner withdrawal is fixed-destination, approval-gated, and preserves gas reserve on sweep
-- local whitelist persistence stores the symbolic policy item
-- chain-visible governance, when enabled, may separately use a concrete contract address
-- execution-time `onchainos` security checks remain downstream of approval
-
-### Medium-term bundle ready
-
-- a fixed policy item can seed a future policy bundle draft
-- bundle payloads can expand into address/action/token scopes without replacing the approval router
-- the agent can explain bundle meaning, risk, and pruning suggestions
-- adding bundle support does not require rewriting the current governance state machine
-
-## 13. Fallback paths
-
-Use these fallback modes when live dependencies are partially unavailable:
-
-- if Telegram is unavailable, show `getTelegramApprovalOutbox()` / callback data through the smoke path
-- if Guardian market input is not live-ready, inject a synthetic drifted portfolio and still demonstrate the runtime event flow
-- if whitelist contract write is not ready on the current machine, stop before the governance segment and do not claim live completion
-- if Uniswap planner skill is unavailable, run the official discovery/readiness proof first and keep execution on the onchainos side only after planner readiness is restored
-- if x402 payment is unavailable, keep the run focused on coordinator and governance proof, and treat x402 as a separate evidence bundle
-
-## 13. Safety reminders
+## 14. Safety Reminders
 
 - Do not use main funds for first-run verification.
 - Keep third-party install review in Docker.
 - Treat quote/read success separately from live execution success.
-- Preserve normalized logs and summaries for every failed step.
+- Preserve normalized logs and summaries for failures instead of hiding them.

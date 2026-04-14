@@ -57,7 +57,7 @@ describe("install operator readiness contract", () => {
     expect(withPk.operatorReady).toBe(true);
   });
 
-  it("requires an execution wallet signal for operator_ready", () => {
+  it("treats OKX bootstrap as a valid managed-wallet execution signal for operator_ready", () => {
     const summary = summarizeRuntimeReadiness({
       PHALANX_RUNTIME_MODE: "live",
       TELEGRAM_BOT_TOKEN: "123456:telegram-token",
@@ -65,8 +65,8 @@ describe("install operator readiness contract", () => {
       OKX_API_SECRET: "okx-secret",
       OKX_API_PASSPHRASE: "okx-pass",
     });
-    expect(summary.operatorReady).toBe(false);
-    expect(summary.operatorMissing).toContain("EXECUTION_WALLET_SIGNAL");
+    expect(summary.operatorReady).toBe(true);
+    expect(summary.operatorMissing).not.toContain("EXECUTION_WALLET_SIGNAL");
   });
 
   it("exposes operator_ready and demo_ready as distinct outcomes", () => {
@@ -78,10 +78,7 @@ describe("install operator readiness contract", () => {
 
     const full = summarizeRuntimeReadiness({
       ...baseOperatorLiveEnv(),
-      POLICY_OWNER_KEY: "0x" + "a".repeat(64),
-      WHITELIST_POLICY_ADDRESS: "0x" + "b".repeat(40),
       PHALANX_OWNER_EVM_ADDRESS: "0x" + "c".repeat(40),
-      BASE_RPC_URL: "https://base.example",
     });
     expect(full.operatorReady).toBe(true);
     expect(full.demoReady).toBe(true);
@@ -94,10 +91,7 @@ describe("install operator readiness contract", () => {
 
     const full = summarizeRuntimeReadiness({
       ...baseOperatorLiveEnv(),
-      POLICY_OWNER_KEY: "0x" + "a".repeat(64),
-      WHITELIST_POLICY_ADDRESS: "0x" + "b".repeat(40),
       PHALANX_OWNER_EVM_ADDRESS: "0x" + "c".repeat(40),
-      BASE_RPC_URL: "https://base.example",
     });
     expect(full.liveReady).toBe(full.demoReady);
   });
@@ -108,12 +102,15 @@ describe("operator init bootstrap", () => {
     const dir = mkdtempSync(join(tmpdir(), "phalanx-init-"));
     try {
       copyFileSync(exampleSource, join(dir, "config.env.example"));
+      writeFileSync(join(dir, "service.env.example"), "PHALANX_RUNTIME_MODE=live\n", "utf8");
       const result = runOperatorInit(dir);
       expect(result.configCreated).toBe(true);
       expect(existsSync(join(dir, "config.env"))).toBe(true);
+      expect(existsSync(join(dir, "service.env"))).toBe(true);
       const created = readFileSync(join(dir, "config.env"), "utf8");
       const example = readFileSync(join(dir, "config.env.example"), "utf8");
       expect(created).toBe(example);
+      expect(readFileSync(join(dir, "service.env"), "utf8")).toBe("PHALANX_RUNTIME_MODE=live\n");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -146,7 +143,7 @@ describe("operator init bootstrap", () => {
       writeFileSync(join(dir, "config.env"), `${envContent}\n`, "utf8");
       const result = runOperatorInit(dir);
       expect(result.requiredMissing).toEqual([]);
-      expect(result.demoMissing).toContain("POLICY_OWNER_KEY");
+      expect(result.demoMissing).toContain("PHALANX_OWNER_EVM_ADDRESS");
       expect(result.optionalMissing).toContain("OMRATE_API_KEY");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -191,13 +188,7 @@ describe("operator init bootstrap", () => {
       expect(partial.summary.operatorReady).toBe(true);
       expect(partial.summary.demoReady).toBe(false);
 
-      const fullEnv = [
-        ...opOnly.split("\n"),
-        `POLICY_OWNER_KEY=0x${"a".repeat(64)}`,
-        `WHITELIST_POLICY_ADDRESS=0x${"b".repeat(40)}`,
-        `PHALANX_OWNER_EVM_ADDRESS=0x${"c".repeat(40)}`,
-        "BASE_RPC_URL=https://base.example",
-      ].join("\n");
+      const fullEnv = [...opOnly.split("\n"), `PHALANX_OWNER_EVM_ADDRESS=0x${"c".repeat(40)}`].join("\n");
       writeFileSync(join(dir, "config.env"), `${fullEnv}\n`, "utf8");
       const full = runOperatorInit(dir);
       expect(full.readinessPhase).toBe("demo_ready");
@@ -249,6 +240,17 @@ describe("operator init bootstrap", () => {
           "OKX_API_KEY=k",
           "OKX_API_SECRET=s",
           "OKX_API_PASSPHRASE=p",
+        ].join("\n") + "\n",
+        "utf8",
+      );
+      expect(initExitCode(runOperatorInit(dir))).toBe(0);
+
+      writeFileSync(
+        join(dir, "config.env"),
+        [
+          "PHALANX_RUNTIME_MODE=live",
+          "TELEGRAM_BOT_TOKEN=t",
+          "OKX_API_KEY=k",
         ].join("\n") + "\n",
         "utf8",
       );

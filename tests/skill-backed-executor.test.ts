@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { parseOnchainosWalletAddressesStdout } from "../src/adapters/onchainos.ts";
+
 describe("skill-backed executor", () => {
   it("uses onchainos swap execution for swap intents", async () => {
     const { createSkillBackedExecutor } = await import("../src/executors/skill-backed.ts");
@@ -235,7 +237,7 @@ describe("skill-backed executor", () => {
     });
   });
 
-  it("prefers the live agent wallet over TEST_WALLET_ADDRESS when runtime mode is live", async () => {
+  it("prefers explicit env wallet over TEST_WALLET_ADDRESS when runtime mode is live", async () => {
     const { createSkillBackedExecutor } = await import("../src/executors/skill-backed.ts");
 
     const executor = createSkillBackedExecutor({
@@ -268,5 +270,153 @@ describe("skill-backed executor", () => {
     });
     expect((result as { argv?: string[] }).argv).toContain("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     expect((result as { argv?: string[] }).argv).not.toContain("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  });
+
+  it("uses Onchain OS managed address by default in live mode when env wallet is unset", async () => {
+    const { createSkillBackedExecutor } = await import("../src/executors/skill-backed.ts");
+
+    const managed = "0xcccccccccccccccccccccccccccccccccccccccc";
+    const executor = createSkillBackedExecutor({
+      env: {
+        PATH: "/definitely/missing",
+        PHALANX_RUNTIME_MODE: "live",
+      } as NodeJS.ProcessEnv,
+      resolveExecutionWalletAddressImpl: async () => managed,
+    });
+
+    const result = await executor.execute({
+      id: "i10",
+      lane: "execution",
+      action: "swap",
+      payload: {
+        fromTokenAddress: "0x1111111111111111111111111111111111111111",
+        toTokenAddress: "0x2222222222222222222222222222222222222222",
+        readableAmount: "1.5",
+        chain: "base",
+      },
+      entrySource: "mcp",
+      target: "uniswap-v3",
+    });
+
+    expect(result).toMatchObject({
+      provider: "onchainos",
+      lane: "swap_execute",
+      status: "tool_missing",
+    });
+    expect((result as { argv?: string[] }).argv).toContain(managed);
+  });
+
+  it("treats PHALANX_WALLET_ADDRESS as override ahead of managed resolution", async () => {
+    const { createSkillBackedExecutor } = await import("../src/executors/skill-backed.ts");
+
+    const executor = createSkillBackedExecutor({
+      env: {
+        PATH: "/definitely/missing",
+        PHALANX_RUNTIME_MODE: "live",
+        PHALANX_WALLET_ADDRESS: "0xdddddddddddddddddddddddddddddddddddddddd",
+      } as NodeJS.ProcessEnv,
+      resolveExecutionWalletAddressImpl: async () => "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    });
+
+    const result = await executor.execute({
+      id: "i11",
+      lane: "execution",
+      action: "swap",
+      payload: {
+        fromTokenAddress: "0x1111111111111111111111111111111111111111",
+        toTokenAddress: "0x2222222222222222222222222222222222222222",
+        readableAmount: "1.5",
+        chain: "base",
+      },
+      entrySource: "mcp",
+      target: "uniswap-v3",
+    });
+
+    expect((result as { argv?: string[] }).argv).toContain("0xdddddddddddddddddddddddddddddddddddddddd");
+    expect((result as { argv?: string[] }).argv).not.toContain("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+  });
+
+  it("fails explicitly in live mode when neither env override nor managed wallet is available", async () => {
+    const { createSkillBackedExecutor } = await import("../src/executors/skill-backed.ts");
+
+    const executor = createSkillBackedExecutor({
+      env: {
+        PATH: "/definitely/missing",
+        PHALANX_RUNTIME_MODE: "live",
+      } as NodeJS.ProcessEnv,
+      resolveExecutionWalletAddressImpl: async () => undefined,
+    });
+
+    const result = await executor.execute({
+      id: "i12",
+      lane: "execution",
+      action: "swap",
+      payload: {
+        fromTokenAddress: "0x1111111111111111111111111111111111111111",
+        toTokenAddress: "0x2222222222222222222222222222222222222222",
+        readableAmount: "1.5",
+        chain: "base",
+      },
+      entrySource: "mcp",
+      target: "uniswap-v3",
+    });
+
+    expect(result).toMatchObject({
+      mode: "execution_wallet_unresolved",
+      code: "EXECUTION_WALLET_UNRESOLVED",
+      action: "swap",
+      chain: "base",
+    });
+  });
+});
+
+describe("parseOnchainosWalletAddressesStdout", () => {
+  it("selects the address for the requested numeric chain id", () => {
+    const stdout = JSON.stringify({
+      ok: true,
+      data: {
+        list: [
+          { chainIndex: "1", address: "0x1111111111111111111111111111111111111111" },
+          { chainIndex: "8453", address: "0x2222222222222222222222222222222222222222" },
+        ],
+      },
+    });
+    expect(parseOnchainosWalletAddressesStdout(stdout, "base")).toBe(
+      "0x2222222222222222222222222222222222222222",
+    );
+  });
+
+  it("uses a single scoped EVM field when the CLI returns no chain index", () => {
+    const stdout = JSON.stringify({
+      ok: true,
+      data: { evmAddress: "0x3333333333333333333333333333333333333333" },
+    });
+    expect(parseOnchainosWalletAddressesStdout(stdout, "8453")).toBe("0x3333333333333333333333333333333333333333");
+  });
+
+  it("prefers an exact requested-chain entry over a top-level evmAddress fallback", () => {
+    const stdout = JSON.stringify({
+      ok: true,
+      data: {
+        evmAddress: "0x3333333333333333333333333333333333333333",
+        list: [
+          { chainIndex: "8453", address: "0x4444444444444444444444444444444444444444" },
+          { chainIndex: "1", address: "0x1111111111111111111111111111111111111111" },
+        ],
+      },
+    });
+    expect(parseOnchainosWalletAddressesStdout(stdout, "base")).toBe(
+      "0x4444444444444444444444444444444444444444",
+    );
+  });
+
+  it("normalizes parsed chain aliases before matching the requested chain", () => {
+    const stdout = JSON.stringify({
+      ok: true,
+      data: {
+        list: [{ chainIndex: "xlayer", address: "0x5555555555555555555555555555555555555555" }],
+      },
+    });
+    expect(parseOnchainosWalletAddressesStdout(stdout, "196")).toBe("0x5555555555555555555555555555555555555555");
   });
 });

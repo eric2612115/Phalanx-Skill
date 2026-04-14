@@ -18,6 +18,7 @@
     "smoke:morpho": "tsx scripts/morpho-live-smoke.ts",
     "smoke:x402": "tsx scripts/x402-live-smoke.ts",
     "smoke:telegram-approval": "tsx scripts/telegram-approval-live-smoke.ts",
+    "smoke:deposit-mainline": "tsx scripts/smoke-deposit-mainline.ts",
     "review:docker:onchainos": "tsx scripts/review-onchainos-docker.ts",
     "review:docker:uniswap": "tsx scripts/review-uniswap-docker.ts",
     "review:docker:all": "npm run review:docker:onchainos && npm run review:docker:uniswap"

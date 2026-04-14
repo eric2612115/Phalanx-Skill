@@ -68,6 +68,43 @@ describe("telegram live notifier", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("Execution report");
-    expect(messages[0]).toContain("Tx: 0xpolicy, 0xdeposit");
+    expect(messages[0]).toContain("Transactions:");
+    expect(messages[0]).toContain("1. 0xpolicy");
+    expect(messages[0]).not.toContain("https://web3.okx.com");
+  });
+
+  it("renders aggregated external explorer links for executable tx hashes", async () => {
+    const messages: string[] = [];
+    const notifier = createTelegramReportNotifier({
+      getOwnerChatId: () => 42,
+      sendMessage: async (_chatId, text) => {
+        messages.push(text);
+      },
+    });
+
+    await notifier.sendExecutionReport({
+      eventId: "evt-3",
+      createdAt: new Date().toISOString(),
+      correlationId: "corr-3",
+      intentId: "intent-3",
+      action: "withdrawLpPosition",
+      entrySource: "guardian",
+      target: "uniswap-v3",
+      stage: "executed",
+      summary: "Executed withdrawLpPosition",
+      txRefs: [
+        "0x2469a7620018864619889fece13ed614b27a87a23c85ac05433e03cec5292cff",
+        "0x1ec2390273ef1d92ff58d4ce7efe42e4462b872cddfdeb583dd002461ec59fd3",
+      ],
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("Transactions:");
+    expect(messages[0]).toContain(
+      "https://web3.okx.com/zh-hant/explorer/base/tx/0x2469a7620018864619889fece13ed614b27a87a23c85ac05433e03cec5292cff",
+    );
+    expect(messages[0]).toContain(
+      "https://web3.okx.com/zh-hant/explorer/base/tx/0x1ec2390273ef1d92ff58d4ce7efe42e4462b872cddfdeb583dd002461ec59fd3",
+    );
   });
 });

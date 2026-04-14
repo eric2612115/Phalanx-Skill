@@ -4,6 +4,7 @@
 
 export const ROUTED_OPERATOR_FAMILIES = [
   "readiness_pending",
+  "lp_position_detail",
   "portfolio_balances",
   "recent_events",
   "why_blocked_next",
@@ -22,6 +23,7 @@ export interface OperatorCatalogRule {
 
 export const OPERATOR_FAMILY_LABELS: Readonly<Record<RoutedOperatorFamily, string>> = {
   readiness_pending: "readiness / status / pending approvals",
+  lp_position_detail: "LP position detail (pool, ticks, liquidity, withdraw hint)",
   portfolio_balances: "portfolio / balances / positions / allocation",
   recent_events: "recent events / guardian actions / tx or correlation refs",
   why_blocked_next: "why blocked / what next",
@@ -57,6 +59,21 @@ export const OPERATOR_CATALOG_RULES: readonly OperatorCatalogRule[] = [
       "system status",
       "health check",
       "status",
+    ],
+  },
+  {
+    family: "lp_position_detail",
+    needles: [
+      "lp position detail",
+      "lp position",
+      "liquidity position detail",
+      "liquidity position",
+      "v3 position detail",
+      "nft position detail",
+      "uniswap v3 position",
+      "uniswap position",
+      "ticks and liquidity",
+      "pool tick range",
     ],
   },
   {

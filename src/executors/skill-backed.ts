@@ -1,13 +1,29 @@
 import type { ExecutionAdapter } from "../runtime/core.js";
 import type { RuntimeIntent } from "../runtime/types.js";
-import { executeOnchainosDefiExecution, executeOnchainosSwapExecution } from "../adapters/onchainos.js";
-import { executeLpPositionIntent } from "../adapters/lp-execution.js";
+import {
+  executeOnchainosDefiExecution,
+  executeOnchainosSwapExecution,
+  resolvePhalanxExecutionWalletAddress,
+} from "../adapters/onchainos.js";
+import { readOperatorLpPositionDetail } from "../adapters/lp-position-query.js";
+import { executeLpPositionIntent, type ExecuteLpPositionIntentHooks } from "../adapters/lp-execution.js";
 import { executeSweepToOwner, executeWithdrawToOwner } from "../adapters/owner-withdraw.js";
 import { type UniswapPlannerExecutionHooks, runUniswapLiquidityPlannerForPayload } from "../adapters/uniswap.js";
+import { OPERATOR_LP_POSITION_DETAIL_SCOPE } from "../runtime/operator-query-scopes.js";
 
 export interface CreateSkillBackedExecutorOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly uniswapPlannerHooks?: UniswapPlannerExecutionHooks;
+  /**
+   * When set, replaces only the Onchain OS managed-address lookup (used in tests).
+   * `PHALANX_WALLET_ADDRESS` / `AGENT_WALLET_ADDRESS` still take precedence when set.
+   */
+  readonly resolveExecutionWalletAddressImpl?: (input: {
+    readonly env: NodeJS.ProcessEnv;
+    readonly chain: string;
+  }) => Promise<string | undefined>;
+  /** Injected for tests; forwards to `executeLpPositionIntent` (discovery + direct NPM withdraw). */
+  readonly lpExecutionHooks?: ExecuteLpPositionIntentHooks;
 }
 
 function stringField(payload: Readonly<Record<string, unknown>>, key: string): string | undefined {
@@ -15,13 +31,62 @@ function stringField(payload: Readonly<Record<string, unknown>>, key: string): s
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function defaultExecutionWalletAddress(env: NodeJS.ProcessEnv): string | undefined {
-  const runtimeMode = (env.PHALANX_RUNTIME_MODE ?? "").trim().toLowerCase();
-  const livePrimary = (env.PHALANX_WALLET_ADDRESS ?? env.AGENT_WALLET_ADDRESS ?? "").trim();
-  if (runtimeMode === "live") {
-    return livePrimary || undefined;
+type ExecutionWalletResolutionResult =
+  | { readonly ok: true; readonly wallet: string }
+  | {
+      readonly ok: false;
+      readonly mode: "execution_wallet_unresolved";
+      readonly code: "EXECUTION_WALLET_UNRESOLVED";
+      readonly action: string;
+      readonly chain: string;
+      readonly summary: string;
+    };
+
+async function resolveExecutionWalletForChain(
+  env: NodeJS.ProcessEnv,
+  chain: string,
+  impl: CreateSkillBackedExecutorOptions["resolveExecutionWalletAddressImpl"],
+): Promise<string | undefined> {
+  return resolvePhalanxExecutionWalletAddress(
+    { env, chain },
+    impl
+      ? {
+          readManagedWalletAddress: async (inp) => {
+            const resolved = await impl({ env: inp.env, chain: inp.chain });
+            return resolved ?? null;
+          },
+        }
+      : {},
+  );
+}
+
+async function requireExecutionWalletForChain(input: {
+  readonly env: NodeJS.ProcessEnv;
+  readonly chain: string;
+  readonly action: string;
+  readonly explicitWallet?: string;
+  readonly resolveImpl: CreateSkillBackedExecutorOptions["resolveExecutionWalletAddressImpl"];
+}): Promise<ExecutionWalletResolutionResult> {
+  if (input.explicitWallet) {
+    return { ok: true, wallet: input.explicitWallet };
   }
-  return livePrimary || (env.TEST_WALLET_ADDRESS ?? "").trim() || undefined;
+  const wallet = await resolveExecutionWalletForChain(input.env, input.chain, input.resolveImpl);
+  if (wallet) {
+    return { ok: true, wallet };
+  }
+  const runtimeMode = (input.env.PHALANX_RUNTIME_MODE ?? "").trim().toLowerCase();
+  if (runtimeMode !== "live") {
+    return { ok: true, wallet: "" };
+  }
+  return {
+    ok: false,
+    mode: "execution_wallet_unresolved",
+    code: "EXECUTION_WALLET_UNRESOLVED",
+    action: input.action,
+    chain: input.chain,
+    summary:
+      "Live execution requires an explicit wallet override or a managed Onchain OS wallet address for the requested chain.",
+  };
 }
 
 function governanceSummary(intent: RuntimeIntent): Record<string, unknown> {
@@ -64,6 +129,8 @@ export function createSkillBackedExecutor(
 ): ExecutionAdapter {
   const env = options.env ?? process.env;
   const uniswapPlannerHooks = options.uniswapPlannerHooks;
+  const resolveWalletImpl = options.resolveExecutionWalletAddressImpl;
+  const lpHooks = options.lpExecutionHooks;
 
   return {
     async execute(intent: RuntimeIntent): Promise<unknown> {
@@ -83,12 +150,22 @@ export function createSkillBackedExecutor(
         const txRefs: string[] = [];
         for (const leg of legs) {
           const chain = stringField(leg.payload, "chain") ?? "ethereum";
+          const walletResult = await requireExecutionWalletForChain({
+            env,
+            chain,
+            action: intent.action,
+            explicitWallet: stringField(leg.payload, "address"),
+            resolveImpl: resolveWalletImpl,
+          });
+          if (!walletResult.ok) {
+            return walletResult;
+          }
           if (leg.action === "deposit") {
             const result = await executeOnchainosDefiExecution(
               {
                 kind: "lending_deposit",
                 investmentId: stringField(leg.payload, "investmentId") ?? "",
-                address: stringField(leg.payload, "address") ?? defaultExecutionWalletAddress(env) ?? "",
+                address: walletResult.wallet,
                 token: stringField(leg.payload, "token") ?? "",
                 amount: stringField(leg.payload, "amount") ?? "",
                 chain,
@@ -103,7 +180,7 @@ export function createSkillBackedExecutor(
             {
               kind: "lending_withdraw",
               investmentId: stringField(leg.payload, "investmentId") ?? "",
-              address: stringField(leg.payload, "address") ?? defaultExecutionWalletAddress(env) ?? "",
+              address: walletResult.wallet,
               chain,
               ratio: stringField(leg.payload, "ratio"),
               amount: stringField(leg.payload, "amount"),
@@ -133,16 +210,37 @@ export function createSkillBackedExecutor(
         return runUniswapLiquidityPlannerForPayload(intent.payload, env, uniswapPlannerHooks);
       }
 
+      if (
+        intent.action === "getPortfolioStatus" &&
+        stringField(intent.payload, "operatorScope") === OPERATOR_LP_POSITION_DETAIL_SCOPE
+      ) {
+        return readOperatorLpPositionDetail(intent.payload, env, {
+          resolveExecutionWalletAddressImpl: resolveWalletImpl,
+          ...(lpHooks ?? {}),
+        });
+      }
+
       if (intent.action === "deposit") {
         const payload = intent.payload;
+        const chain = stringField(payload, "chain") ?? "ethereum";
+        const walletResult = await requireExecutionWalletForChain({
+          env,
+          chain,
+          action: intent.action,
+          explicitWallet: stringField(payload, "address"),
+          resolveImpl: resolveWalletImpl,
+        });
+        if (!walletResult.ok) {
+          return walletResult;
+        }
         return executeOnchainosDefiExecution(
           {
             kind: "lending_deposit",
             investmentId: stringField(payload, "investmentId") ?? "",
-            address: stringField(payload, "address") ?? defaultExecutionWalletAddress(env) ?? "",
+            address: walletResult.wallet,
             token: stringField(payload, "token") ?? "",
             amount: stringField(payload, "amount") ?? "",
-            chain: stringField(payload, "chain") ?? "ethereum",
+            chain,
           },
           env,
         );
@@ -150,12 +248,23 @@ export function createSkillBackedExecutor(
 
       if (intent.action === "withdraw") {
         const payload = intent.payload;
+        const chain = stringField(payload, "chain") ?? "ethereum";
+        const walletResult = await requireExecutionWalletForChain({
+          env,
+          chain,
+          action: intent.action,
+          explicitWallet: stringField(payload, "address"),
+          resolveImpl: resolveWalletImpl,
+        });
+        if (!walletResult.ok) {
+          return walletResult;
+        }
         return executeOnchainosDefiExecution(
           {
             kind: "lending_withdraw",
             investmentId: stringField(payload, "investmentId") ?? "",
-            address: stringField(payload, "address") ?? defaultExecutionWalletAddress(env) ?? "",
-            chain: stringField(payload, "chain") ?? "ethereum",
+            address: walletResult.wallet,
+            chain,
             ratio: stringField(payload, "ratio"),
             amount: stringField(payload, "amount"),
             slippage: stringField(payload, "slippage"),
@@ -167,7 +276,10 @@ export function createSkillBackedExecutor(
       }
 
       if (intent.action === "depositLpPosition" || intent.action === "withdrawLpPosition") {
-        return executeLpPositionIntent(intent.action, intent.payload, env, intent.target);
+        return executeLpPositionIntent(intent.action, intent.payload, env, intent.target, {
+          resolveExecutionWalletAddressImpl: resolveWalletImpl,
+          ...(lpHooks ?? {}),
+        });
       }
 
       if (intent.action === "withdrawToOwner") {
@@ -180,12 +292,23 @@ export function createSkillBackedExecutor(
 
       if (intent.action === "swap") {
         const payload = intent.payload;
+        const chain = stringField(payload, "chain") ?? "base";
+        const walletResult = await requireExecutionWalletForChain({
+          env,
+          chain,
+          action: intent.action,
+          explicitWallet: stringField(payload, "wallet"),
+          resolveImpl: resolveWalletImpl,
+        });
+        if (!walletResult.ok) {
+          return walletResult;
+        }
         return executeOnchainosSwapExecution(
           {
             fromTokenAddress: stringField(payload, "fromTokenAddress") ?? "",
             toTokenAddress: stringField(payload, "toTokenAddress") ?? "",
-            chain: stringField(payload, "chain") ?? "base",
-            wallet: stringField(payload, "wallet") ?? defaultExecutionWalletAddress(env) ?? "",
+            chain,
+            wallet: walletResult.wallet,
             amount: stringField(payload, "amount"),
             readableAmount: stringField(payload, "readableAmount"),
             slippage: stringField(payload, "slippage"),

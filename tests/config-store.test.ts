@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ConfigStore,
   buildRuntimeConfig,
+  hasExecutionWalletSignal,
   loadRuntimeConfigValues,
   summarizeRuntimeReadiness,
 } from "../src/config/store";
@@ -86,7 +87,7 @@ describe("ConfigStore", () => {
     expect(summary.missing).toContain("OKX_API_KEY");
   });
 
-  it("treats governance and owner execution keys as demo-only in live mode", () => {
+  it("treats owner binding as the remaining demo-only key when static RPC defaults are available", () => {
     const summary = summarizeRuntimeReadiness({
       PHALANX_RUNTIME_MODE: "live",
       TELEGRAM_BOT_TOKEN: "token",
@@ -101,13 +102,12 @@ describe("ConfigStore", () => {
 
     expect(summary.operatorReady).toBe(true);
     expect(summary.demoReady).toBe(false);
-    expect(summary.operatorMissing).not.toContain("POLICY_OWNER_KEY");
-    expect(summary.operatorMissing).not.toContain("WHITELIST_POLICY_ADDRESS");
-    expect(summary.demoMissing).toContain("POLICY_OWNER_KEY");
-    expect(summary.demoMissing).toContain("WHITELIST_POLICY_ADDRESS");
+    expect(summary.operatorMissing).not.toContain("PHALANX_OWNER_EVM_ADDRESS");
+    expect(summary.demoMissing).toContain("PHALANX_OWNER_EVM_ADDRESS");
+    expect(summary.demoMissing).not.toContain("BASE_RPC_URL");
   });
 
-  it("reports all demo-only missing keys under the current live readiness contract", () => {
+  it("reports only owner binding as missing when live defaults cover static RPC endpoints", () => {
     const summary = summarizeRuntimeReadiness({
       PHALANX_RUNTIME_MODE: "live",
       TELEGRAM_BOT_TOKEN: "token",
@@ -121,10 +121,8 @@ describe("ConfigStore", () => {
     });
 
     expect(summary.liveReady).toBe(false);
-    expect(summary.missing).toContain("POLICY_OWNER_KEY");
-    expect(summary.missing).toContain("WHITELIST_POLICY_ADDRESS");
     expect(summary.missing).toContain("PHALANX_OWNER_EVM_ADDRESS");
-    expect(summary.missing).toContain("BASE_RPC_URL");
+    expect(summary.missing).not.toContain("BASE_RPC_URL");
   });
 
   it("buildRuntimeConfig masks secrets in readiness summary", () => {
@@ -169,6 +167,32 @@ describe("ConfigStore", () => {
     expect(merged.OTHER).toBe("1");
   });
 
+  it("merges sibling service.env before config.env so user config stays authoritative", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "config.env");
+    const servicePath = join(dir, "service.env");
+    writeFileSync(
+      servicePath,
+      "OMRATE_API_BASE_URL=https://service.example\nPHALANX_GUARDIAN_ENABLED=1\nWHITELIST_TARGETS=pool\n",
+      "utf8",
+    );
+    writeFileSync(
+      configPath,
+      "OMRATE_API_KEY=user-omrate\nPHALANX_GUARDIAN_ENABLED=0\nTELEGRAM_BOT_TOKEN=file-token\n",
+      "utf8",
+    );
+
+    const merged = loadRuntimeConfigValues(configPath, {
+      TELEGRAM_BOT_TOKEN: "env-token",
+    });
+
+    expect(merged.OMRATE_API_BASE_URL).toBe("https://service.example");
+    expect(merged.OMRATE_API_KEY).toBe("user-omrate");
+    expect(merged.WHITELIST_TARGETS).toBe("pool");
+    expect(merged.PHALANX_GUARDIAN_ENABLED).toBe("0");
+    expect(merged.TELEGRAM_BOT_TOKEN).toBe("env-token");
+  });
+
   it("buildRuntimeConfig accepts backend env aliases when primary keys are absent", () => {
     const config = buildRuntimeConfig({
       PHALANX_RUNTIME_MODE: "live",
@@ -189,6 +213,21 @@ describe("ConfigStore", () => {
     expect(config.wallet.testAddress).toBe("0x1111111111111111111111111111111111111111");
   });
 
+  it("buildRuntimeConfig falls back to fixed OmRate, xLayer, and Base RPC defaults", () => {
+    const config = buildRuntimeConfig({
+      PHALANX_RUNTIME_MODE: "live",
+      TELEGRAM_BOT_TOKEN: "token",
+      OKX_API_KEY: "okx-key",
+      OKX_API_SECRET: "okx-secret",
+      OKX_API_PASSPHRASE: "okx-pass",
+      AGENT_WALLET_ADDRESS: "0x1111111111111111111111111111111111111111",
+    });
+
+    expect(config.omrate.baseUrl).toBe("https://api.omrate.com");
+    expect(config.chain.xlayerRpcUrl).toBe("https://rpc.xlayer.tech");
+    expect(config.chain.baseRpcUrl).toBe("https://mainnet.base.org");
+  });
+
   it("buildRuntimeConfig can derive OmRate base URL from backend public URL when OmRate-specific keys are absent", () => {
     const config = buildRuntimeConfig({
       PHALANX_RUNTIME_MODE: "live",
@@ -203,13 +242,25 @@ describe("ConfigStore", () => {
     expect(config.omrate.baseUrl).toBe("http://127.0.0.1:8000");
   });
 
-  it("requires an execution wallet signal for operatorReady in live mode", () => {
-    const summary = summarizeRuntimeReadiness({
+  it("treats full OKX bootstrap as execution wallet baseline in live mode without explicit env address", () => {
+    const values = {
       PHALANX_RUNTIME_MODE: "live",
       TELEGRAM_BOT_TOKEN: "token",
       OKX_API_KEY: "okx-key",
       OKX_API_SECRET: "okx-secret",
       OKX_API_PASSPHRASE: "okx-pass",
+    };
+    expect(hasExecutionWalletSignal(values)).toBe(true);
+
+    const summary = summarizeRuntimeReadiness(values);
+    expect(summary.operatorReady).toBe(true);
+    expect(summary.operatorMissing).not.toContain("EXECUTION_WALLET_SIGNAL");
+  });
+
+  it("still flags execution wallet baseline when live mode lacks OKX credentials and env wallet", () => {
+    const summary = summarizeRuntimeReadiness({
+      PHALANX_RUNTIME_MODE: "live",
+      TELEGRAM_BOT_TOKEN: "token",
     });
 
     expect(summary.operatorReady).toBe(false);

@@ -14,6 +14,8 @@ function formatPayloadBody(payload: OperatorQueryPayload): string {
   switch (payload.family) {
     case "readiness_pending":
       return formatReadiness(payload.snapshot);
+    case "lp_position_detail":
+      return formatLpPositionDetail(payload.snapshot);
     case "portfolio_balances":
       return formatPortfolio(payload.snapshot);
     case "recent_events":
@@ -49,6 +51,22 @@ function formatReadiness(snapshot: Extract<OperatorQueryPayload, { family: "read
     `Guidance: ${snapshot.guidance}`,
   ];
   return lines.join("\n");
+}
+
+function formatLpPositionDetail(snapshot: Extract<OperatorQueryPayload, { family: "lp_position_detail" }>["snapshot"]): string {
+  if (snapshot.status === "unavailable") {
+    return ["Phalanx LP position", "", `Unavailable (${snapshot.code}): ${snapshot.message}`].join("\n");
+  }
+  return [
+    "Phalanx LP position",
+    "",
+    `Pool: ${snapshot.poolAddress}`,
+    `Token id: ${snapshot.tokenId}`,
+    `Ticks: ${snapshot.tickLower} → ${snapshot.tickUpper}`,
+    `Liquidity: ${snapshot.liquidity}`,
+    `In range: ${snapshot.inRange ? "yes" : "no"}`,
+    `Withdraw: ${snapshot.withdrawabilitySummary}`,
+  ].join("\n");
 }
 
 function formatPortfolio(snapshot: Extract<OperatorQueryPayload, { family: "portfolio_balances" }>["snapshot"]): string {

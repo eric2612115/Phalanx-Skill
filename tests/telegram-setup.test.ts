@@ -105,11 +105,14 @@ describe("telegram setup flow", () => {
   it("runs capability hooks and persists validated step values into ConfigStore", async () => {
     const dir = mkdtempSync(join(tmpdir(), "phalanx-telegram-setup-"));
     const configPath = join(dir, "config.env");
+    const servicePath = join(dir, "service.env");
     writeFileSync(configPath, "", "utf8");
+    writeFileSync(servicePath, "", "utf8");
     const config = new ConfigStore(configPath);
+    const service = new ConfigStore(servicePath);
     const checks: string[] = [];
     const session = createSetupSession({
-      hooks: createConfigBackedSetupHooks(config, {
+      hooks: createConfigBackedSetupHooks(config, service, {
         validateCapability: async ({ step }) => {
           checks.push(step);
           return null;
@@ -156,10 +159,12 @@ describe("telegram setup flow", () => {
     ]);
 
     const raw = readFileSync(configPath, "utf8");
+    const serviceRaw = readFileSync(servicePath, "utf8");
     expect(raw).toContain("TELEGRAM_ALLOWED_USER_ID=5");
     expect(raw).toContain("OKX_API_KEY=key");
     expect(raw).toContain("OMRATE_API_KEY=omrate-key");
-    expect(raw).toContain("WHITELIST_TARGETS=uniswap-v3,pancakeswap-v3");
+    expect(raw).not.toContain("WHITELIST_TARGETS=");
+    expect(serviceRaw).toContain("WHITELIST_TARGETS=uniswap-v3,pancakeswap-v3");
   });
 });
 

@@ -35,6 +35,10 @@ export type UniswapPlannerDexPoolSummary = {
   readonly liquidityUsd?: number;
   readonly volumeH24?: number;
   readonly dexId?: string;
+  readonly baseTokenSymbol?: string;
+  readonly baseTokenAddress?: string;
+  readonly quoteTokenSymbol?: string;
+  readonly quoteTokenAddress?: string;
 };
 
 export type UniswapLiquidityPlannerInvocationPlan = {
@@ -233,12 +237,75 @@ function mapDexPoolRow(row: unknown): UniswapPlannerDexPoolSummary {
     r.quoteToken && typeof r.quoteToken === "object" ? (r.quoteToken as Record<string, unknown>) : {};
   const bSym = typeof baseToken.symbol === "string" ? baseToken.symbol : "";
   const qSym = typeof quoteToken.symbol === "string" ? quoteToken.symbol : "";
+  const bAddr = typeof baseToken.address === "string" ? baseToken.address : "";
+  const qAddr = typeof quoteToken.address === "string" ? quoteToken.address : "";
   const pairLabel = bSym && qSym ? `${bSym}/${qSym}` : undefined;
   const liq = r.liquidity && typeof r.liquidity === "object" ? (r.liquidity as Record<string, unknown>) : {};
   const liquidityUsd = typeof liq.usd === "number" ? liq.usd : undefined;
   const vol = r.volume && typeof r.volume === "object" ? (r.volume as Record<string, unknown>) : {};
   const volumeH24 = typeof vol.h24 === "number" ? vol.h24 : undefined;
-  return { dexId, pairAddress, pairLabel, version, liquidityUsd, volumeH24 };
+  return {
+    dexId,
+    pairAddress,
+    pairLabel,
+    version,
+    liquidityUsd,
+    volumeH24,
+    baseTokenSymbol: bSym || undefined,
+    baseTokenAddress: bAddr || undefined,
+    quoteTokenSymbol: qSym || undefined,
+    quoteTokenAddress: qAddr || undefined,
+  };
+}
+
+function normalizePlannerTokenMatchKey(value: string | undefined): string {
+  const normalized = (value ?? "").trim().toLowerCase();
+  switch (normalized) {
+    case "weth":
+      return "eth";
+    case "wbase":
+      return "base";
+    default:
+      return normalized;
+  }
+}
+
+function poolMatchesRequestedTokens(
+  pool: UniswapPlannerDexPoolSummary,
+  tokenA: string,
+  tokenB: string,
+): boolean {
+  const requestedA = normalizePlannerTokenMatchKey(tokenA);
+  const requestedB = normalizePlannerTokenMatchKey(tokenB);
+  if (!requestedA || !requestedB) {
+    return false;
+  }
+  const baseKeys = [
+    normalizePlannerTokenMatchKey(pool.baseTokenSymbol),
+    normalizePlannerTokenMatchKey(pool.baseTokenAddress),
+  ].filter((value) => value.length > 0);
+  const quoteKeys = [
+    normalizePlannerTokenMatchKey(pool.quoteTokenSymbol),
+    normalizePlannerTokenMatchKey(pool.quoteTokenAddress),
+  ].filter((value) => value.length > 0);
+  const forward = baseKeys.includes(requestedA) && quoteKeys.includes(requestedB);
+  const reverse = baseKeys.includes(requestedB) && quoteKeys.includes(requestedA);
+  return forward || reverse;
+}
+
+function pickRuntimePool(
+  pools: readonly UniswapPlannerDexPoolSummary[],
+  positionType: "v2" | "v3" | "v4",
+  tokenA: string,
+  tokenB: string,
+): UniswapPlannerDexPoolSummary | undefined {
+  const addressable = pools.filter((pool) => typeof pool.pairAddress === "string");
+  return (
+    addressable.find((pool) => pool.version === positionType && poolMatchesRequestedTokens(pool, tokenA, tokenB)) ??
+    addressable.find((pool) => poolMatchesRequestedTokens(pool, tokenA, tokenB)) ??
+    addressable.find((pool) => pool.version === positionType) ??
+    addressable[0]
+  );
 }
 
 function parseSkillsListForLiquidityPlanner(stdout: string): boolean {
@@ -309,6 +376,24 @@ async function fetchUniswapPoolsDexScreener(
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, summary: msg.replace(/\s+/g, " ").slice(0, 200) };
   }
+}
+
+function mergeDexPoolSummaries(
+  left: readonly UniswapPlannerDexPoolSummary[],
+  right: readonly UniswapPlannerDexPoolSummary[],
+): UniswapPlannerDexPoolSummary[] {
+  const seen = new Set<string>();
+  const merged: UniswapPlannerDexPoolSummary[] = [];
+  for (const pool of [...left, ...right]) {
+    const pairAddress = pool.pairAddress?.toLowerCase();
+    const dedupeKey = pairAddress || `${pool.dexId ?? ""}:${pool.pairLabel ?? ""}:${pool.version ?? ""}`;
+    if (!dedupeKey || seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    merged.push(pool);
+  }
+  return merged;
 }
 
 function extractDeepLinkBaseFromSkillMarkdown(skillMd: string): string | undefined {
@@ -424,15 +509,17 @@ export async function executeUniswapLiquidityPlannerInvocation(
   }
 
   const net = chainToDexScreenerNetwork(chain);
-  const probe = net ? resolveLiquidityPlannerProbeAddress(chain, tokenA) : undefined;
-  if (!net || !probe) {
+  const primaryProbe = net ? resolveLiquidityPlannerProbeAddress(chain, tokenA) : undefined;
+  const secondaryProbe = net ? resolveLiquidityPlannerProbeAddress(chain, tokenB) : undefined;
+  if (!net || !primaryProbe) {
     return {
       provider: "uniswap",
       lane: "liquidity_planner_skill",
       status: "failed",
-      summary: !net
-        ? `Unsupported or unknown chain for DexScreener probe: ${chain}`
-        : `Could not resolve probe token address for ${tokenA} on ${chain}; pass an ERC-20 address.`,
+      summary:
+        !net
+          ? `Unsupported or unknown chain for DexScreener probe: ${chain}`
+          : `Could not resolve probe token address for ${tokenA} on ${chain}; pass an ERC-20 address.`,
       officialSurface: {
         skillFile: plan.skillFile,
         skillName: parsed.name,
@@ -444,13 +531,13 @@ export async function executeUniswapLiquidityPlannerInvocation(
     };
   }
 
-  const dex = await fetchUniswapPoolsDexScreener(net, probe, fetchFn);
-  if (!dex.ok) {
+  const primaryDex = await fetchUniswapPoolsDexScreener(net, primaryProbe, fetchFn);
+  if (!primaryDex.ok) {
     return {
       provider: "uniswap",
       lane: "liquidity_planner_skill",
       status: "failed",
-      summary: `Liquidity planner data plane failed: ${dex.summary}`,
+      summary: `Liquidity planner data plane failed: ${primaryDex.summary}`,
       officialSurface: {
         skillFile: plan.skillFile,
         skillName: parsed.name,
@@ -460,14 +547,23 @@ export async function executeUniswapLiquidityPlannerInvocation(
       },
       officialInvocation,
     };
+  }
+  let pools = primaryDex.pools;
+  if (secondaryProbe && secondaryProbe.toLowerCase() !== primaryProbe.toLowerCase()) {
+    const secondaryDex = await fetchUniswapPoolsDexScreener(net, secondaryProbe, fetchFn);
+    if (secondaryDex.ok) {
+      pools = mergeDexPoolSummaries(primaryDex.pools, secondaryDex.pools);
+    }
   }
 
   const dataPlane = {
     source: "dexscreener_token_pairs_v1" as const,
     network: net,
-    tokenProbeAddress: probe,
-    uniswapPools: dex.pools,
+    tokenProbeAddress: primaryProbe,
+    uniswapPools: pools,
   };
+
+  const runtimePool = pickRuntimePool(pools, positionType, tokenA, tokenB);
 
   return {
     provider: "uniswap",
@@ -496,7 +592,7 @@ export async function executeUniswapLiquidityPlannerInvocation(
       executionTarget: "uniswap-v3",
       executionAction: "depositLpPosition",
       positionCreateBaseUrl: deepLinkBase,
-      topUniswapPools: dex.pools.slice(0, 8),
+      topUniswapPools: pools.slice(0, 8),
       plannerInput: plan.input,
       payloadTemplate: {
         protocol: "uniswap-v3",
@@ -508,7 +604,7 @@ export async function executeUniswapLiquidityPlannerInvocation(
         amountSecondary: "",
         range: "",
         positionType,
-        poolAddress: dex.pools[0]?.pairAddress,
+        poolAddress: runtimePool?.pairAddress,
       },
       missingExecutionFields: ["investmentId", "amount", "amountSecondary", "range"],
     },

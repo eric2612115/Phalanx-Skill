@@ -88,12 +88,12 @@ export function runInstallChecks(
   const govOk = !!(policyOwner && policyAddr);
   checks.push({
     id: "governance_write",
-    category: "demo_required",
-    ok: !live || govOk,
+    category: "optional",
+    ok: true,
     title: "Governance write prerequisites",
     detail: govOk
-      ? "POLICY_OWNER_KEY and WHITELIST_POLICY_ADDRESS present"
-      : "set POLICY_OWNER_KEY and WHITELIST_POLICY_ADDRESS for demo-ready governance",
+      ? "POLICY_OWNER_KEY and WHITELIST_POLICY_ADDRESS present (optional on-chain governance enabled)"
+      : "not set (optional future on-chain governance enhancement)",
   });
 
   const ownerEvm = getConfigEnvValue(values, "PHALANX_OWNER_EVM_ADDRESS");
@@ -108,10 +108,10 @@ export function runInstallChecks(
   const baseRpc = getConfigEnvValue(values, "BASE_RPC_URL");
   checks.push({
     id: "base_rpc",
-    category: "demo_required",
-    ok: !live || !!baseRpc,
+    category: "info",
+    ok: true,
     title: "Base RPC",
-    detail: baseRpc ? "BASE_RPC_URL set" : "set BASE_RPC_URL for Base execution",
+    detail: `${baseRpc} (fixed default for Base execution; override BASE_RPC_URL only if needed)`,
   });
 
   checks.push({

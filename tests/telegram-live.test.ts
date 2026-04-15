@@ -84,6 +84,37 @@ describe("telegram live notifier", () => {
     expect(lines.join("\n").toLowerCase()).toMatch(/lifecycle|pending|mode/i);
   });
 
+  it("formats queued jobs with sequence numbers and waiting counts", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const { runOperatorQuery } = await import("../src/telegram/operator-queries.ts");
+    const { formatOperatorQueryPayload } = await import("../src/telegram/operator-formatters.ts");
+
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      configValues: {
+        OKX_AGENTIC_WALLET_PROFILES_JSON: JSON.stringify({
+          profiles: [
+            {
+              profileId: "profile-1",
+              email: "alpha@example.com",
+              wallets: [{ walletId: "wallet-1", address: "0x1111111111111111111111111111111111111111" }],
+            },
+          ],
+        }),
+      },
+    });
+    host.enqueueTelegramJob("Deposit 8 USDC -> Aave Base");
+    host.enqueueTelegramJob("Deposit 8 USDC -> Morpho Base");
+    host.enqueueTelegramJob("Mint LP position");
+
+    const payload = await runOperatorQuery(host, "job_queue");
+    const body = formatOperatorQueryPayload(payload).join("\n");
+    expect(body).toContain("[#1] Deposit 8 USDC -> Aave Base");
+    expect(body).toContain("[#2] Deposit 8 USDC -> Morpho Base");
+    expect(body).toContain("[#3] Mint LP position");
+    expect(body).toContain("waiting... (2 ahead)");
+  });
+
   it("redacts sensitive text from recent-events operator replies", async () => {
     const { formatOperatorQueryPayload } = await import("../src/telegram/operator-formatters.ts");
     const lines = formatOperatorQueryPayload({

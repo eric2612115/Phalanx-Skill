@@ -21,6 +21,7 @@ import {
 import { formatOperatorQueryPayload } from "./operator-formatters.js";
 import { runOperatorQuery } from "./operator-queries.js";
 import { classifyOperatorTelegramText } from "./operator-router.js";
+import { buildTelegramJobCallbackData } from "./job-queue.js";
 
 type SendMessageExtra = {
   reply_markup?: unknown;
@@ -89,6 +90,9 @@ export function buildOperatorHelpKeyboard(): Keyboard {
     .text("status")
     .text("portfolio")
     .row()
+    .text("queue")
+    .text("show wallets")
+    .row()
     .text("recent events")
     .text("what next")
     .row()
@@ -112,6 +116,12 @@ export function buildOperatorStartKeyboard(): Keyboard {
     }
   });
   return keyboard.resized();
+}
+
+function buildQueueKeyboard(jobId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("Cancel", buildTelegramJobCallbackData("cancel", jobId))
+    .text("Edit", buildTelegramJobCallbackData("edit", jobId));
 }
 
 export function createTelegramApprovalNotifier(
@@ -309,6 +319,9 @@ export function createTelegramReportNotifier(
 }
 
 function callbackSummary(result: Awaited<ReturnType<PhalanxHost["handleTelegramCallback"]>>): string {
+  if (result.summary) {
+    return result.summary;
+  }
   if (!result.handled) {
     return "Approval callback ignored.";
   }
@@ -400,6 +413,39 @@ export function registerTelegramBotHandlers(bot: GrammyLikeBot, host: PhalanxHos
     const operatorId = session.ownerUserId;
     const fromId = ctx.from?.id;
     if (!operatorId || fromId === undefined || String(fromId) !== operatorId) {
+      return;
+    }
+
+    const editing = host.getTelegramJobQueue().jobs.find((job) => job.status === "editing");
+    if (editing) {
+      const updated = host.applyTelegramJobEdit(trimmed);
+      if (updated) {
+        await ctx.reply(`Updated ${updated.id}: ${updated.summary}`, {
+          reply_markup: buildQueueKeyboard(updated.id),
+        });
+        return;
+      }
+    }
+
+    const activateProfile = trimmed.match(/^use\s+profile\s+([a-z0-9_-]+)$/i);
+    if (activateProfile) {
+      await ctx.reply(host.setActiveAgenticProfile(activateProfile[1]!).summary);
+      return;
+    }
+
+    const activateWallet = trimmed.match(/^use\s+wallet\s+([a-z0-9_-]+)$/i);
+    if (activateWallet) {
+      await ctx.reply(host.setActiveAgenticWallet(activateWallet[1]!).summary);
+      return;
+    }
+
+    const enqueue = trimmed.match(/^queue\s+(.+)$/i);
+    if (enqueue) {
+      const job = host.enqueueTelegramJob(enqueue[1]!);
+      const ahead = Math.max(0, host.getTelegramJobQueue().jobs.length - 1);
+      await ctx.reply(`Queued ${job.id}: ${job.summary}\nwaiting... (${ahead} ahead)`, {
+        reply_markup: buildQueueKeyboard(job.id),
+      });
       return;
     }
 

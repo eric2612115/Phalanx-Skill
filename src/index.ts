@@ -2,8 +2,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createPhalanxHost } from "./app/host.js";
-import { loadRuntimeConfigValues } from "./config/store.js";
+import { loadRuntimeConfigValues, resolveMemoryStatePath } from "./config/store.js";
 import { maybeStartGuardianFromEnv } from "./guardian/service.js";
+import { McpMemoryStateStore } from "./memory/mcp-memory-store.js";
 import { startPhalanxMcpStdioServer } from "./mcp/stdio.js";
 import { startTelegramBotPolling } from "./telegram/live.js";
 
@@ -22,8 +23,16 @@ function writeStartup(value: unknown, useStdErr = false): void {
 export async function main(): Promise<void> {
   const configPath = process.env.PHALANX_CONFIG_PATH?.trim() || resolve(process.cwd(), "config.env");
   const runtimeEnv = loadRuntimeConfigValues(configPath, process.env);
+  const memoryPath = resolveMemoryStatePath(configPath, runtimeEnv);
+  const stateStore = new McpMemoryStateStore(memoryPath);
+  const restoredState = await stateStore.loadLatestState().catch(() => null);
   const guardianEnabled = runtimeEnv.PHALANX_GUARDIAN_ENABLED === "1";
-  const host = createPhalanxHost({ guardianEnabled, configValues: runtimeEnv });
+  const host = createPhalanxHost({
+    guardianEnabled,
+    configValues: runtimeEnv,
+    stateStore,
+    initialMemoryState: restoredState,
+  });
   const summary = host.getStartupSummary();
   const useMcpStdio = runtimeEnv.PHALANX_ENABLE_MCP_STDIO === "1";
   writeStartup(
@@ -53,7 +62,9 @@ export async function main(): Promise<void> {
     });
   }
 
-  const stopGuardian = maybeStartGuardianFromEnv(host, runtimeEnv as NodeJS.ProcessEnv);
+  const stopGuardian = maybeStartGuardianFromEnv(host, runtimeEnv as NodeJS.ProcessEnv, {
+    stateStore,
+  });
   let keepAlive: ReturnType<typeof setInterval> | undefined;
   if (runtimeEnv.PHALANX_DRY_RUN_KEEPALIVE !== "0") {
     keepAlive = setInterval(() => {}, 60_000);

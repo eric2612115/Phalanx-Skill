@@ -395,9 +395,12 @@ function buildOmRateExecutionEvidence(omRate: OmRateQueryExecutionResult): Execu
     paymentRequiredByServer: omRate.paymentRequiredByServer,
     queryStatus: omRate.status,
     httpStatus: omRate.httpStatus,
+    paymentAttempted: omRate.paymentAttempted ?? false,
     paymentWrapped: omRate.paymentWrapped ?? false,
+    paymentSettled: omRate.paymentSettled ?? false,
     fetchSummary: omRate.fetchSummary ?? "omrate_fetch_summary_unavailable",
     baselineReady: omRate.x402BaselineReady,
+    receipt: omRate.paymentReceipt,
   });
   return {
     payment,

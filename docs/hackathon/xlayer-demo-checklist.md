@@ -15,17 +15,18 @@ Stronger optional proof:
 ## Preflight
 
 1. Confirm `config.env` is present and matches the current live setup.
-2. Confirm the active wallet selection is correct for the current chain.
+2. Confirm the active wallet selection is correct for the current chain (`OKX_AGENTIC_WALLET_PROFILES_JSON` / active wallet, or an intentional override).
 3. Confirm small test funds are already in the Agentic Wallet.
-4. Confirm Telegram bot and owner chat are working, and that only one bot poller is active for this token.
-5. Run:
+4. For the paid OmRate story, confirm the **active** Agentic wallet already holds X Layer USDT; X Layer is the preferred x402 lane and Base is fallback only when X Layer is insufficient.
+5. Confirm Telegram bot and owner chat are working, and that only one bot poller is active for this token.
+6. Run:
 
 ```bash
 npm run build
 npm run guard:ai
 ```
 
-6. Run focused tests:
+7. Run focused tests:
 
 ```bash
 npm test -- tests/uniswap-v3-execution.test.ts tests/uniswap-official-planner.test.ts
@@ -33,7 +34,7 @@ npm test -- tests/uniswap-v3-execution.test.ts tests/uniswap-official-planner.te
 
 ## Runtime Proof
 
-1. Start the runtime.
+1. Start the runtime (`npm start` for the operator-facing path).
 2. Capture startup summary and readiness.
 3. Open the private bot chat and confirm `/start` / `/help` respond in the intended owner chat.
 4. Trigger the LP deposit path.
@@ -47,6 +48,7 @@ If you are recording the fuller allocation story instead of the default deposit 
 1. Confirm `PHALANX_AGENTIC_REBALANCE_DEMO_ENABLED=1`.
 2. Confirm `PHALANX_FLOW_PROFILE` is compatible with the allocation story.
 3. Capture grouped tx links plus `x402 summary` / runtime evidence after the flow completes.
+4. Show that the paid OmRate path used the active Agentic wallet and selected X Layer before any Base fallback.
 
 ## Evidence To Save
 

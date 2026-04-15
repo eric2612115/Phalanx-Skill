@@ -24,7 +24,17 @@ export type OperatorQueryPayload =
     }
   | { readonly family: "whitelist_policy"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorPolicySnapshot>> }
   | { readonly family: "risk_guardian"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorRiskSnapshot>> }
-  | { readonly family: "wallets_binding"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorBindingSnapshot>> };
+  | { readonly family: "wallets_binding"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorBindingSnapshot>> }
+  | {
+      readonly family: "job_queue";
+      readonly snapshot: {
+        readonly jobs: ReturnType<PhalanxHost["getTelegramJobQueue"]>["jobs"];
+        readonly activeProfileEmail?: string;
+        readonly activeProfileId?: string;
+        readonly activeWalletId?: string;
+        readonly activeWalletAddress?: string;
+      };
+    };
 
 export async function runOperatorQuery(host: PhalanxHost, family: RoutedOperatorFamily): Promise<OperatorQueryPayload> {
   switch (family) {
@@ -46,5 +56,16 @@ export async function runOperatorQuery(host: PhalanxHost, family: RoutedOperator
       return { family, snapshot: await fetchOperatorRiskSnapshot(host) };
     case "wallets_binding":
       return { family, snapshot: await fetchOperatorBindingSnapshot(host) };
+    case "job_queue":
+      return {
+        family,
+        snapshot: {
+          jobs: host.getTelegramJobQueue().jobs,
+          activeProfileEmail: host.getRuntimeConfig().wallet.activeProfileEmail,
+          activeProfileId: host.getRuntimeConfig().wallet.activeProfileId,
+          activeWalletId: host.getRuntimeConfig().wallet.activeWalletId,
+          activeWalletAddress: host.getRuntimeConfig().wallet.activeAddress,
+        },
+      };
   }
 }

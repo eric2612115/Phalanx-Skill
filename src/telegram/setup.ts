@@ -1,5 +1,10 @@
 import { resolve } from "node:path";
 import { ConfigStore, getTelegramAllowedUserId, loadRuntimeConfigValues, resolveServiceConfigPath } from "../config/store.js";
+import {
+  normalizeAgenticWalletRegistry,
+  serializeAgenticWalletRegistry,
+  upsertAgenticWalletRegistryEntry,
+} from "../config/agentic-wallet-registry.js";
 import { readOnchainosManagedWalletAddress } from "../adapters/onchainos.js";
 import type { RuntimeLifecycleState } from "../runtime/types.js";
 import {
@@ -607,6 +612,18 @@ export function createConfigBackedSetupHooks(
       const configValues: Record<string, string> = {};
       for (const [key, value] of Object.entries(values)) {
         configValues[key] = value;
+      }
+      const email =
+        configValues.OKX_AGENTIC_WALLET_LOGIN_EMAIL ??
+        configStore.getSnapshot().values.OKX_AGENTIC_WALLET_LOGIN_EMAIL;
+      const address = configValues.OKX_AGENTIC_WALLET_CURRENT_ADDRESS;
+      if (email && address) {
+        const merged = { ...configStore.getSnapshot().values, ...configValues };
+        const registry = upsertAgenticWalletRegistryEntry(normalizeAgenticWalletRegistry(merged), {
+          email,
+          address,
+        });
+        configValues.OKX_AGENTIC_WALLET_PROFILES_JSON = serializeAgenticWalletRegistry(registry);
       }
       if (Object.keys(configValues).length > 0) {
         configStore.updateValidated(configValues, () => null);

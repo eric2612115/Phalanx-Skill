@@ -189,7 +189,9 @@ describe("buildPaymentEvidenceForOmRateHttpCall", () => {
       x402Requested: true,
       paymentRequiredByServer: undefined,
       queryStatus: "skipped",
+      paymentAttempted: false,
       paymentWrapped: false,
+      paymentSettled: false,
       fetchSummary: "no_base",
       baselineReady: false,
     });
@@ -206,9 +208,12 @@ describe("buildPaymentEvidenceForOmRateHttpCall", () => {
       paymentRequiredByServer: false,
       queryStatus: "completed",
       httpStatus: 200,
+      paymentAttempted: true,
       paymentWrapped: true,
+      paymentSettled: true,
       fetchSummary: "x402_wrapped_fetch:eip155:8453",
       baselineReady: true,
+      receipt: { selectedNetwork: "eip155:8453" },
     });
     expect(ok.paymentAttempted).toBe(true);
     expect(ok.paymentWrapped).toBe(true);
@@ -220,7 +225,9 @@ describe("buildPaymentEvidenceForOmRateHttpCall", () => {
       paymentRequiredByServer: true,
       queryStatus: "failed",
       httpStatus: 402,
+      paymentAttempted: false,
       paymentWrapped: false,
+      paymentSettled: false,
       fetchSummary: "plain_fetch:payment_disabled",
       baselineReady: true,
     });
@@ -236,13 +243,42 @@ describe("buildPaymentEvidenceForOmRateHttpCall", () => {
       paymentRequiredByServer: undefined,
       queryStatus: "completed",
       httpStatus: 200,
+      paymentAttempted: false,
       paymentWrapped: false,
+      paymentSettled: false,
       fetchSummary: "plain_fetch:x402_not_requested",
       baselineReady: false,
     });
     expect(p.mode).toBe("plain");
     expect(p.paymentAttempted).toBe(false);
     expect(p.paymentWrapped).toBe(false);
+  });
+
+  it("carries agentic-wallet selection metadata for replayed payments", () => {
+    const p = buildPaymentEvidenceForOmRateHttpCall({
+      x402Requested: true,
+      paymentRequiredByServer: true,
+      queryStatus: "completed",
+      httpStatus: 200,
+      paymentAttempted: true,
+      paymentWrapped: true,
+      paymentSettled: true,
+      fetchSummary: "agentic_x402:eip155:196",
+      baselineReady: true,
+      receipt: {
+        payerAddress: "0x0dfddf188f102978c75882bc990d903ebe08f443",
+        selectedNetwork: "eip155:196",
+        walletSource: "agentic_active_wallet",
+      },
+    });
+    expect(p.paymentAttempted).toBe(true);
+    expect(p.paymentWrapped).toBe(true);
+    expect(p.paymentSettled).toBe(true);
+    expect(p.receipt).toMatchObject({
+      payerAddress: "0x0dfddf188f102978c75882bc990d903ebe08f443",
+      selectedNetwork: "eip155:196",
+      walletSource: "agentic_active_wallet",
+    });
   });
 });
 
@@ -252,7 +288,9 @@ describe("milestonesForOmRateHttpCall", () => {
       x402Requested: true,
       paymentRequiredByServer: undefined,
       queryStatus: "skipped",
+      paymentAttempted: false,
       paymentWrapped: false,
+      paymentSettled: false,
       fetchSummary: "x",
       baselineReady: false,
     });
@@ -263,7 +301,9 @@ describe("milestonesForOmRateHttpCall", () => {
       paymentRequiredByServer: true,
       queryStatus: "failed",
       httpStatus: 500,
+      paymentAttempted: false,
       paymentWrapped: false,
+      paymentSettled: false,
       fetchSummary: "x",
       baselineReady: true,
     });

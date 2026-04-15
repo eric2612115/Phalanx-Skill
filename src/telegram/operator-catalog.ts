@@ -12,6 +12,7 @@ export const ROUTED_OPERATOR_FAMILIES = [
   "whitelist_policy",
   "risk_guardian",
   "wallets_binding",
+  "job_queue",
 ] as const;
 
 export type RoutedOperatorFamily = (typeof ROUTED_OPERATOR_FAMILIES)[number];
@@ -32,6 +33,7 @@ export const OPERATOR_FAMILY_LABELS: Readonly<Record<RoutedOperatorFamily, strin
   whitelist_policy: "whitelist / allowlist / policy summary",
   risk_guardian: "risk summary / guardian assessment",
   wallets_binding: "owner wallet / agent wallet / binding summary",
+  job_queue: "job queue / pending tasks / editable jobs",
 };
 
 /**
@@ -142,9 +144,17 @@ export const OPERATOR_CATALOG_RULES: readonly OperatorCatalogRule[] = [
     ],
   },
   {
+    family: "job_queue",
+    needles: ["job queue", "queue", "queued jobs", "jobs"],
+  },
+  {
     family: "wallets_binding",
     needles: [
       "binding summary",
+      "show profiles",
+      "show wallets",
+      "active wallet",
+      "active profile",
       "telegram binding",
       "owner wallet",
       "agent wallet",

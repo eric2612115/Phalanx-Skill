@@ -10,12 +10,17 @@ afterEach(() => {
 });
 
 describe("repo layout", () => {
-  it("exposes build, dev, and test scripts", () => {
+  it("exposes build, start, dev, and test scripts", () => {
     const raw = readFileSync(join(root, "package.json"), "utf8");
     const pkg = JSON.parse(raw) as { scripts?: Record<string, string> };
     expect(pkg.scripts?.build).toBeTruthy();
+    expect(pkg.scripts?.start).toBeTruthy();
     expect(pkg.scripts?.dev).toBeTruthy();
     expect(pkg.scripts?.test).toBeTruthy();
+  });
+
+  it("includes PM2 runtime packaging config", () => {
+    expect(existsSync(join(root, "ecosystem.config.cjs"))).toBe(true);
   });
 
   it("includes bootstrap entry at src/index.ts", () => {

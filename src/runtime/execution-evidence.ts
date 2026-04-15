@@ -186,10 +186,13 @@ export interface BuildPaymentEvidenceForOmRateHttpCallInput {
   readonly paymentRequiredByServer?: boolean;
   readonly queryStatus: "skipped" | "completed" | "failed";
   readonly httpStatus?: number;
+  readonly paymentAttempted: boolean;
   readonly paymentWrapped: boolean;
+  readonly paymentSettled: boolean;
   readonly fetchSummary: string;
   /** From env/x402 sync summary at call time (planned or degraded means signing stack present). */
   readonly baselineReady: boolean;
+  readonly receipt?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -202,9 +205,8 @@ export function buildPaymentEvidenceForOmRateHttpCall(
   const paymentRequired = input.paymentRequiredByServer === true;
   const mode: PaymentEvidenceMode = paymentRequired ? "x402_required" : input.x402Requested ? "x402_optional" : "plain";
   const paymentWrapped = input.x402Requested && input.paymentWrapped;
-  const paymentAttempted = paymentWrapped;
-  const paymentSettled =
-    paymentWrapped && (input.queryStatus === "completed" || input.queryStatus === "failed");
+  const paymentAttempted = input.x402Requested && input.paymentAttempted;
+  const paymentSettled = input.x402Requested && input.paymentSettled;
   const statusPart =
     input.queryStatus === "skipped"
       ? `skipped:${input.fetchSummary}`
@@ -218,6 +220,9 @@ export function buildPaymentEvidenceForOmRateHttpCall(
   };
   if (input.httpStatus !== undefined) {
     receipt.httpStatus = input.httpStatus;
+  }
+  if (input.receipt) {
+    Object.assign(receipt, input.receipt);
   }
   return normalizePaymentEvidence({
     mode,

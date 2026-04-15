@@ -259,6 +259,57 @@ describe("ConfigStore", () => {
     expect(config.chain.baseRpcUrl).toBe("https://mainnet.base.org");
   });
 
+  it("buildRuntimeConfig exposes the active wallet from the agentic wallet registry", () => {
+    const config = buildRuntimeConfig({
+      PHALANX_RUNTIME_MODE: "live",
+      TELEGRAM_BOT_TOKEN: "token",
+      OKX_API_KEY: "okx-key",
+      OKX_API_SECRET: "okx-secret",
+      OKX_API_PASSPHRASE: "okx-pass",
+      OKX_AGENTIC_WALLET_PROFILES_JSON: JSON.stringify({
+        activeProfileId: "profile-b",
+        activeWalletId: "wallet-b2",
+        profiles: [
+          {
+            profileId: "profile-a",
+            email: "alpha@example.com",
+            wallets: [{ walletId: "wallet-a1", address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+          },
+          {
+            profileId: "profile-b",
+            email: "beta@example.com",
+            wallets: [
+              { walletId: "wallet-b1", address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+              { walletId: "wallet-b2", address: "0xcccccccccccccccccccccccccccccccccccccccc" },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(config.wallet.activeProfileId).toBe("profile-b");
+    expect(config.wallet.activeWalletId).toBe("wallet-b2");
+    expect(config.wallet.activeAddress).toBe("0xcccccccccccccccccccccccccccccccccccccccc");
+    expect(config.wallet.activeProfileEmail).toBe("beta@example.com");
+  });
+
+  it("hasExecutionWalletSignal treats the active agentic wallet as a valid runtime signal", () => {
+    expect(
+      hasExecutionWalletSignal({
+        PHALANX_RUNTIME_MODE: "live",
+        OKX_AGENTIC_WALLET_PROFILES_JSON: JSON.stringify({
+          profiles: [
+            {
+              profileId: "profile-a",
+              email: "alpha@example.com",
+              wallets: [{ walletId: "wallet-a1", address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+            },
+          ],
+        }),
+      }),
+    ).toBe(true);
+  });
+
   it("buildRuntimeConfig can derive OmRate base URL from backend public URL when OmRate-specific keys are absent", () => {
     const config = buildRuntimeConfig({
       PHALANX_RUNTIME_MODE: "live",

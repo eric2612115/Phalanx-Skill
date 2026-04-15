@@ -25,7 +25,7 @@ Follow this end-to-end once per fresh checkout before exploring optional branche
 1. **Clone and install:** `git clone` → `cd Phalanx-Skill` → `npm install` → `npm run init`
 2. **`config.env`:** fill only the human-required keys the init summary lists. Use `@BotFather` for `TELEGRAM_BOT_TOKEN`. Leave `TELEGRAM_ALLOWED_USER_ID` blank until claim succeeds; a successful private `/claim` **writes it automatically**. `@userinfobot` is **not** the main onboarding path (optional numeric-id lookup only).
 3. **`service.env`:** enable the runtime and demo switches you need (`PHALANX_RUNTIME_MODE`, allocation-demo flags, RPC defaults, etc.—see the sections below)
-4. **Start the runtime:** `npm run dev` (or `PHALANX_ENABLE_MCP_STDIO=1 npm run dev` when using MCP stdio)—terminal bootstrap ends here; ongoing operator flow is in Telegram.
+4. **Start the runtime:** `npm start` (or `PHALANX_ENABLE_MCP_STDIO=1 npm start` when using MCP stdio). Use `npm run dev` only for local iteration; terminal bootstrap ends here and ongoing operator flow is in Telegram.
 5. **Telegram private chat:** message the bot, send `/start` to open onboarding + FAQ, then complete `/claim` → `confirm`. The Telegram wizard now continues as login email → OKX trio → optional OmRate key (`skip` allowed) → OTP / managed-wallet confirmation → funding confirmation → allocate-now-or-skip.
 6. **Optional verify:** compare `TELEGRAM_ALLOWED_USER_ID` in `config.env` to your Telegram user id if you want a manual cross-check (binding does not require `@userinfobot`)
 7. **Readiness smoke:** `npm run smoke:live`
@@ -43,10 +43,12 @@ Use this checklist before `smoke:deposit-mainline`, `smoke:allocation-mainline`,
    - deposit-only story: live mode + Telegram + wallet + funds
    - allocation/x402 story: the same, plus `PHALANX_AGENTIC_REBALANCE_DEMO_ENABLED=1` and a compatible `PHALANX_FLOW_PROFILE`
 4. Confirm the managed wallet path is the one you expect:
-   - Telegram wizard already recorded `OKX_AGENTIC_WALLET_CURRENT_ADDRESS`, or
+   - Telegram wizard already recorded `OKX_AGENTIC_WALLET_CURRENT_ADDRESS`, and/or
+   - `OKX_AGENTIC_WALLET_PROFILES_JSON` shows the intended active profile / active wallet, or
    - an intentional override is set and understood as override-only
 5. Confirm funds are already present in the active managed wallet before asking the runtime to execute.
-6. Confirm which proof you are collecting:
+6. For the paid OmRate / allocation story, preload X Layer USDT into the **active Agentic wallet** before the runtime hits `PAYMENT-REQUIRED`. X Layer is preferred first; Base is fallback only when X Layer is present but insufficient.
+7. Confirm which proof you are collecting:
    - `npm run smoke:deposit-mainline` for the stable recording cut
    - `npm run smoke:allocation-mainline` for the fuller proactive allocation + x402 story
 
@@ -93,6 +95,7 @@ Live operator minimum:
 - `TELEGRAM_ALLOWED_USER_ID` is auto-written after the first successful private `/claim`
 - `OKX_AGENTIC_WALLET_LOGIN_EMAIL` is a user-specific Telegram-collected field for OKX TEE login / OTP
 - `OKX_AGENTIC_WALLET_CURRENT_ADDRESS` / `OKX_AGENTIC_WALLET_ADDRESS_HISTORY` are local records written after managed-wallet confirmation
+- `OKX_AGENTIC_WALLET_PROFILES_JSON` is the preferred local registry for multi-Gmail / multi-wallet operators and their active wallet selection
 - `OMRATE_API_KEY` is optional
 - `AGENT_WALLET_ADDRESS` is troubleshooting override-only, not the primary wizard path
 
@@ -103,13 +106,15 @@ If the operator changes `OKX_AGENTIC_WALLET_LOGIN_EMAIL` later from Telegram, Ag
 - `OMRATE_API_BASE_URL` defaults to `https://api.omrate.com`
 - `BASE_RPC_URL` defaults to `https://mainnet.base.org`
 - `XLAYER_RPC_URL` defaults to `https://rpc.xlayer.tech`
+- `PHALANX_GUARDIAN_INTERVAL_MS` defaults to a long-running product interval (4 hours) and can be lowered locally for tests
+- `PHALANX_MEMORY_STATE_PATH` can override the local runtime memory snapshot path
 - `PHALANX_RUNTIME_MODE`, guardian flags, execution backend, whitelist targets, and governance write keys live there
 - `POLICY_OWNER_KEY` and `WHITELIST_POLICY_ADDRESS` are future extensions, not current demo blockers
 
 Wallet note:
 
-- the repo is moving toward `Onchain OS` managed-address-first selection
-- some live paths may still require explicit wallet env override until that cleanup is fully finished
+- the repo now prefers `Onchain OS` managed-address-first selection
+- one operator may keep multiple Gmail profiles and multiple Agentic wallets; Telegram can switch the active profile / wallet before execution
 - if a path fails because it selects the wrong `from` address, treat that as a wallet-resolution/config issue, not a proof that LP execution is broken
 
 ## 3. Re-run Third-Party Review Before Host Installation
@@ -154,13 +159,13 @@ Before any real live LP execution:
 Without MCP stdio:
 
 ```bash
-PHALANX_DRY_RUN_KEEPALIVE=0 npm run dev
+PHALANX_DRY_RUN_KEEPALIVE=0 npm start
 ```
 
 With MCP stdio enabled:
 
 ```bash
-PHALANX_ENABLE_MCP_STDIO=1 npm run dev
+PHALANX_ENABLE_MCP_STDIO=1 npm start
 ```
 
 When MCP stdio is enabled, startup output goes to `stderr` to avoid corrupting the protocol stream.
@@ -184,6 +189,13 @@ When `TELEGRAM_BOT_TOKEN` is valid and `PHALANX_RUNTIME_MODE=live`:
    - `current whitelist`
    - `risk summary`
    - `agent wallet`
+   - `queue`
+
+Bounded Telegram operator actions now also include:
+
+- `queue <summary>` to add a pending operator task
+- inline `Cancel` / `Edit` buttons on queued jobs
+- `use profile <profile-id>` and `use wallet <wallet-id>` to switch the active identity before execution
 
 Unknown free-form text in READY private chat should receive a fallback that points back to `/help` and the catalog themes.
 

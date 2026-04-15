@@ -40,6 +40,8 @@ function formatPayloadBody(payload: OperatorQueryPayload): string {
       return formatRisk(payload.snapshot);
     case "wallets_binding":
       return formatBinding(payload.snapshot);
+    case "job_queue":
+      return formatJobQueue(payload.snapshot);
     default: {
       const _exhaustive: never = payload;
       return _exhaustive;
@@ -311,6 +313,8 @@ function formatBinding(snapshot: Extract<OperatorQueryPayload, { family: "wallet
     `Wallet source: ${snapshot.wallet.source}`,
     `Wallet reason: ${snapshot.wallet.reason}`,
     `Wallet override active: ${snapshot.wallet.overrideActive ? "yes" : "no"}`,
+    `Active profile: ${snapshot.wallet.activeProfileId ?? "unset"}${snapshot.wallet.activeProfileEmail ? ` (${snapshot.wallet.activeProfileEmail})` : ""}`,
+    `Active wallet: ${snapshot.wallet.activeWalletId ?? "unset"}${snapshot.wallet.activeWalletAddress ? ` (${snapshot.wallet.activeWalletAddress})` : ""}`,
     "",
     `Base RPC configured: ${snapshot.chain.baseRpcConfigured ? "yes" : "no"}`,
     `xLayer RPC configured: ${snapshot.chain.xlayerRpcConfigured ? "yes" : "no"}`,
@@ -320,5 +324,30 @@ function formatBinding(snapshot: Extract<OperatorQueryPayload, { family: "wallet
     `Live ready: ${snapshot.readiness.liveReady ? "yes" : "no"}`,
     `Demo ready: ${snapshot.readiness.demoReady ? "yes" : "no"}`,
   ];
+  return lines.join("\n");
+}
+
+function formatJobQueue(snapshot: Extract<OperatorQueryPayload, { family: "job_queue" }>["snapshot"]): string {
+  const lines = [
+    "AgentPhalanx job queue",
+    "",
+    `Active profile: ${snapshot.activeProfileId ?? "unset"}${snapshot.activeProfileEmail ? ` (${snapshot.activeProfileEmail})` : ""}`,
+    `Active wallet: ${snapshot.activeWalletId ?? "unset"}${snapshot.activeWalletAddress ? ` (${snapshot.activeWalletAddress})` : ""}`,
+  ];
+  if (snapshot.jobs.length === 0) {
+    lines.push("", "No queued jobs.");
+    return lines.join("\n");
+  }
+  lines.push("", `Queued tasks (${snapshot.jobs.length})`);
+  snapshot.jobs.forEach((job, index) => {
+    lines.push(`[#${index + 1}] ${job.summary}`);
+    if (job.status === "editing") {
+      lines.push("editing... reply with updated parameters");
+    } else if (index === 0) {
+      lines.push("waiting... (0 ahead)");
+    } else {
+      lines.push(`waiting... (${index} ahead)`);
+    }
+  });
   return lines.join("\n");
 }

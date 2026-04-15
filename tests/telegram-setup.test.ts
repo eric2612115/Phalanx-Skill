@@ -179,6 +179,7 @@ describe("telegram setup flow", () => {
     expect(raw).toContain("OMRATE_API_KEY=omrate-key");
     expect(raw).toContain("OKX_AGENTIC_WALLET_CURRENT_ADDRESS=0x1111111111111111111111111111111111111111");
     expect(raw).toContain("OKX_AGENTIC_WALLET_ADDRESS_HISTORY=0x1111111111111111111111111111111111111111");
+    expect(raw).toContain("OKX_AGENTIC_WALLET_PROFILES_JSON=");
     expect(raw).not.toContain("AGENT_WALLET_ADDRESS=");
     expect(serviceRaw).not.toContain("WHITELIST_TARGETS=");
   });

@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsc",
     "init": "tsx scripts/init-operator.ts",
+    "start": "tsx scripts/start-runtime.ts",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "guard:ai": "node scripts/ai-governance-guard.mjs",

@@ -3,6 +3,38 @@ import { buildPortfolioSnapshot } from "../src/adapters/portfolio.ts";
 import { runGuardianCycle } from "../src/guardian/cycle.ts";
 
 describe("runtime host integration", () => {
+  it("restores active wallet and pending jobs from memory state on restart", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const baseConfig = {
+      OKX_AGENTIC_WALLET_PROFILES_JSON: JSON.stringify({
+        profiles: [
+          {
+            profileId: "profile-1",
+            email: "alpha@example.com",
+            wallets: [
+              { walletId: "wallet-1", address: "0x1111111111111111111111111111111111111111" },
+              { walletId: "wallet-2", address: "0x2222222222222222222222222222222222222222" },
+            ],
+          },
+        ],
+      }),
+    };
+
+    const host = createPhalanxHost({ lifecycle: "READY", configValues: baseConfig });
+    host.enqueueTelegramJob("Deposit 8 USDC -> Aave Base");
+    host.setActiveAgenticWallet("wallet-2");
+
+    const restored = createPhalanxHost({
+      lifecycle: "READY",
+      configValues: baseConfig,
+      initialMemoryState: host.exportMemoryState(),
+    });
+
+    expect(restored.getRuntimeConfig().wallet.activeWalletId).toBe("wallet-2");
+    expect(restored.getTelegramJobQueue().jobs).toHaveLength(1);
+  });
+
   it("routes whitelist-change approvals back through RuntimeCore on Telegram approve", async () => {
     const { createPhalanxHost } = await import("../src/app/host.ts");
 

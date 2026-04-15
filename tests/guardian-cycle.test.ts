@@ -9,6 +9,10 @@ import {
   resolveGuardianPortfolioInputs,
   startGuardianTicker,
 } from "../src/guardian/service.ts";
+import { McpMemoryStateStore } from "../src/memory/mcp-memory-store.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -228,5 +232,70 @@ describe("guardian service", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(results).toEqual(["NOTIFY_ONLY", "NOTIFY_ONLY"]);
     stop();
+  });
+
+  it("persists portfolio_state after a guardian cycle and restores it on restart", async () => {
+    vi.useFakeTimers();
+    const dir = mkdtempSync(join(tmpdir(), "phalanx-guardian-memory-"));
+    const store = new McpMemoryStateStore(join(dir, "memory.json"));
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+
+    const portfolio = buildPortfolioSnapshot(
+      [
+        { kind: "lending", currentBps: 8_000, targetBps: 5_000 },
+        { kind: "lp", currentBps: 2_000, targetBps: 5_000 },
+      ],
+      1,
+    );
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      configValues: {
+        OKX_AGENTIC_WALLET_PROFILES_JSON: JSON.stringify({
+          profiles: [
+            {
+              profileId: "profile-1",
+              email: "alpha@example.com",
+              wallets: [{ walletId: "wallet-1", address: "0x1111111111111111111111111111111111111111" }],
+            },
+          ],
+        }),
+      },
+    });
+    host.enqueueTelegramJob("Deposit 8 USDC -> Aave Base");
+
+    const stop = maybeStartGuardianFromEnv(
+      host,
+      {
+        PHALANX_GUARDIAN_ENABLED: "1",
+        PHALANX_GUARDIAN_INTERVAL_MS: "5000",
+      } as NodeJS.ProcessEnv,
+      {
+        stateStore: store,
+        loadPortfolioImpl: async () => portfolio,
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    stop?.();
+
+    const restored = await store.loadLatestState();
+    expect(restored?.portfolioState?.buckets).toHaveLength(2);
+    expect(restored?.pendingJobs).toHaveLength(1);
+
+    const restarted = createPhalanxHost({
+      lifecycle: "READY",
+      configValues: {
+        OKX_AGENTIC_WALLET_PROFILES_JSON: JSON.stringify({
+          profiles: [
+            {
+              profileId: "profile-1",
+              email: "alpha@example.com",
+              wallets: [{ walletId: "wallet-1", address: "0x1111111111111111111111111111111111111111" }],
+            },
+          ],
+        }),
+      },
+      initialMemoryState: restored,
+    });
+    expect(restarted.getTelegramJobQueue().jobs).toHaveLength(1);
   });
 });

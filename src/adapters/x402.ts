@@ -5,6 +5,8 @@
 
 import { privateKeyToAccount } from "viem/accounts";
 
+import { getExecutionWalletAddress, hasExecutionWalletSignal, hasOkxBootstrapCredentials } from "../config/store.js";
+
 export type X402AdapterSurface = {
   provider: "x402";
   layers: readonly ["payment", "fetch"];
@@ -177,6 +179,10 @@ function paymentExplicitlyEnabled(env: NodeJS.ProcessEnv): boolean {
   return (env.PHALANX_X402_PAYMENT_ENABLED ?? "").trim() === "1";
 }
 
+function privateKeyFallbackExplicitlyEnabled(env: NodeJS.ProcessEnv): boolean {
+  return (env.PHALANX_X402_FORCE_FETCH_WRAP ?? "").trim() === "1";
+}
+
 /**
  * Sync summary for payment-gated resources (no network). Reflects env toggles only.
  */
@@ -195,13 +201,27 @@ export function x402PaymentAwareSummary(
     };
   }
 
-  const pk = normalizeHexKey(env.PHALANX_X402_PRIVATE_KEY ?? env.X402_PRIVATE_KEY ?? "");
-  if (!pk) {
+  const activeWalletAddress = getExecutionWalletAddress(env);
+  if (hasOkxBootstrapCredentials(env) && hasExecutionWalletSignal(env)) {
     return {
       provider: "x402",
-      status: "tool_missing",
+      status: "planned",
       paymentLayer: "x402",
-      summary: "PHALANX_X402_PRIVATE_KEY (or X402_PRIVATE_KEY) missing; cannot sign x402 payloads.",
+      summary: activeWalletAddress
+        ? "x402 agentic payment requested; runtime will use the active Agentic wallet and Onchain OS for PAYMENT-REQUIRED replays."
+        : "x402 agentic payment requested; runtime has OKX bootstrap credentials and will resolve the active wallet before replaying PAYMENT-REQUIRED responses.",
+      ...(input.resource ? { resource: input.resource } : {}),
+    };
+  }
+
+  const pk = normalizeHexKey(env.PHALANX_X402_PRIVATE_KEY ?? env.X402_PRIVATE_KEY ?? "");
+  if (pk && privateKeyFallbackExplicitlyEnabled(env)) {
+    return {
+      provider: "x402",
+      status: "planned",
+      paymentLayer: "x402",
+      summary:
+        "x402 private-key fetch wrapping is explicitly enabled for debugging; production mainline should prefer the active Agentic wallet path.",
       schemeModuleHint: (env.PHALANX_X402_EVM_PACKAGE ?? "").trim() ? "custom" : "default_evm",
       ...(input.resource ? { resource: input.resource } : {}),
     };
@@ -209,11 +229,10 @@ export function x402PaymentAwareSummary(
 
   return {
     provider: "x402",
-    status: "planned",
+    status: "tool_missing",
     paymentLayer: "x402",
     summary:
-      "x402 payment wrap requested; runtime uses @x402/fetch + optional EVM scheme package when import succeeds.",
-    schemeModuleHint: (env.PHALANX_X402_EVM_PACKAGE ?? "").trim() ? "custom" : "default_evm",
+      "x402 payment is enabled but runtime lacks an active Agentic wallet / OKX bootstrap path. Configure OKX credentials plus an active wallet registry (or use explicit debug fetch wrapping).",
     ...(input.resource ? { resource: input.resource } : {}),
   };
 }
@@ -298,6 +317,9 @@ export async function assessX402PaymentReadiness(
 ): Promise<X402PaymentAwareSummary> {
   const sync = x402PaymentAwareSummary({}, env);
   if (sync.status !== "planned") return sync;
+  if (!privateKeyFallbackExplicitlyEnabled(env)) {
+    return sync;
+  }
 
   const r = await resolvePaymentAwareFetch(env, baseFetch);
   if (r.paymentWrapped) {

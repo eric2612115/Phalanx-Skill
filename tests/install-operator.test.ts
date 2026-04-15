@@ -23,6 +23,12 @@ function baseOperatorLiveEnv(): Record<string, string | undefined> {
 }
 
 describe("install operator readiness contract", () => {
+  it("uses a packaged npm start entrypoint for long-running runtime startup", () => {
+    const raw = readFileSync(join(repoRoot, "package.json"), "utf8");
+    const pkg = JSON.parse(raw) as { scripts?: Record<string, string> };
+    expect(pkg.scripts?.start).toMatch(/start-runtime|src\/index/);
+  });
+
   it("treats OMRATE_API_KEY as optional for operator_ready", () => {
     const summary = summarizeRuntimeReadiness(baseOperatorLiveEnv());
     expect(summary.operatorReady).toBe(true);

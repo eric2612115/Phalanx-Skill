@@ -239,6 +239,92 @@ describe("omrate adapter (contract)", () => {
     expect("executionEvidence" in r).toBe(false);
   });
 
+  it("executeOmRateQuery uses the agentic x402 path when payment is required", async () => {
+    const paymentRequired = Buffer.from(
+      JSON.stringify({
+        x402Version: 1,
+        accepts: [
+          {
+            scheme: "exact",
+            network: "eip155:196",
+            amount: "1000",
+            asset: "0x1111111111111111111111111111111111111111",
+            payTo: "0x9999999999999999999999999999999999999999",
+          },
+        ],
+      }),
+      "utf8",
+    ).toString("base64");
+
+    const mockFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("payment required", {
+          status: 402,
+          headers: { "PAYMENT-REQUIRED": paymentRequired },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response('{"ok":true}', {
+          status: 200,
+          headers: { "PAYMENT-RESPONSE": "paid_x402", "X-PAYMENT-ID": "payment-123" },
+        }),
+      );
+
+    const r = await executeOmRateQuery(
+      { path: "/v1/ping", method: "GET", x402Aware: true },
+      {
+        OMRATE_API_BASE: "https://api.test",
+        PHALANX_X402_PAYMENT_ENABLED: "1",
+        OKX_API_KEY: "okx-key",
+        OKX_API_SECRET: "okx-secret",
+        OKX_API_PASSPHRASE: "okx-pass",
+        OKX_AGENTIC_WALLET_PROFILES_JSON: JSON.stringify({
+          profiles: [
+            {
+              profileId: "profile-1",
+              email: "alpha@example.com",
+              wallets: [{ walletId: "wallet-1", address: "0x0dfddf188f102978c75882bc990d903ebe08f443" }],
+            },
+          ],
+        }),
+      } as NodeJS.ProcessEnv,
+      {
+        fetch: mockFetch,
+        x402: {
+          balanceProbe: async () => ({ sufficient: true }),
+          executePayment: async () => ({
+            provider: "onchainos" as const,
+            lane: "x402_payment" as const,
+            status: "completed" as const,
+            argv: [],
+            summary: "onchainos x402 payment command completed",
+            stdout: JSON.stringify({
+              data: {
+                authorization: {
+                  from: "0x0dfddf188f102978c75882bc990d903ebe08f443",
+                  nonce: "1",
+                  to: "0x9999999999999999999999999999999999999999",
+                  validAfter: "0",
+                  validBefore: "9999999999",
+                  value: "1000",
+                },
+                signature: "0xsigned",
+              },
+            }),
+            stderr: "",
+            exitCode: 0,
+          }),
+        },
+      },
+    );
+
+    expect(r.status).toBe("completed");
+    expect(r.paymentRequiredByServer).toBe(true);
+    expect(r.paymentWrapped).toBe(true);
+    expect(r.fetchSummary).toContain("agentic_x402");
+  });
+
   it("summarizeOmRateAdapterEnv reflects base and key presence", () => {
     const empty = summarizeOmRateAdapterEnv({});
     expect(empty.baseConfigured).toBe(false);

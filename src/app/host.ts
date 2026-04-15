@@ -4,6 +4,12 @@ import {
   type RuntimeConfig,
   type RuntimeMode,
 } from "../config/store.js";
+import {
+  activateAgenticProfile,
+  activateAgenticWallet,
+  serializeAgenticWalletRegistry,
+  type AgenticWalletRegistry,
+} from "../config/agentic-wallet-registry.js";
 import { ApprovalPolicy } from "../policy/approval-policy.js";
 import { PolicyGate } from "../policy/gate.js";
 import { WhitelistPolicy } from "../policy/whitelist-policy.js";
@@ -17,6 +23,13 @@ import { invokePhalanxMcpTool, type McpToolResult, type TelegramApprovalNotifier
 import { buildStatusToolResult } from "../mcp/tools/status.js";
 import { buildApprovalCallbackData, parseApprovalCallbackData } from "../telegram/approvals.js";
 import { createSetupSession, handleTelegramUpdate, type SetupSession, type TelegramUpdate } from "../telegram/setup.js";
+import {
+  TelegramJobQueue,
+  parseTelegramJobCallbackData,
+  type TelegramJob,
+  type TelegramJobQueueSnapshot,
+} from "../telegram/job-queue.js";
+import type { RuntimeMemoryState, StateStore } from "../memory/state-store.js";
 import { createSkillBackedExecutor } from "../executors/skill-backed.js";
 import { createGovernanceAwareExecutor } from "../executors/governance-aware.js";
 import { writeWhitelistContractAllowance } from "../adapters/whitelist-contract.js";
@@ -73,6 +86,7 @@ export interface TelegramCallbackResult {
   readonly handled: boolean;
   readonly decision?: "approve" | "reject";
   readonly runtimeOutcome?: RuntimeOutcome;
+  readonly summary?: string;
 }
 
 export interface RuntimeStartupSummary {
@@ -120,6 +134,8 @@ export interface CreatePhalanxHostOptions {
     readonly positionType?: RebalanceDemoFlowInput["positionType"];
   };
   readonly rebalanceDemoRunner?: (input: RebalanceDemoFlowInput) => Promise<RebalanceDemoFlowResult>;
+  readonly stateStore?: StateStore;
+  readonly initialMemoryState?: RuntimeMemoryState | null;
 }
 
 export interface PhalanxHost {
@@ -145,6 +161,13 @@ export interface PhalanxHost {
     readonly executionOrTestAddress?: string;
     readonly walletEvidence: WalletEvidence;
   };
+  getTelegramJobQueue(): TelegramJobQueueSnapshot;
+  enqueueTelegramJob(summary: string): TelegramJob;
+  applyTelegramJobEdit(summary: string): TelegramJob | undefined;
+  setActiveAgenticProfile(profileId: string): { ok: boolean; summary: string };
+  setActiveAgenticWallet(walletId: string): { ok: boolean; summary: string };
+  exportMemoryState(): RuntimeMemoryState;
+  hydrateMemoryState(state: RuntimeMemoryState | null): void;
   getLatestRebalanceDemoRunSummary(): RebalanceDemoRunMetadata | undefined;
   /**
    * Runs {@link executeGuardianAllocationMainline} with the same MCP bridge and funding gates as the
@@ -183,10 +206,11 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
   const approvalRouter = new ApprovalRouter();
   const pendingOps = new PendingOperationsTracker();
   const approvalOutbox: ApprovalOutboxItem[] = [];
+  const jobQueue = new TelegramJobQueue();
   const runtimeEvents: RuntimeEvent[] = [];
   const session = options.setupSession ?? createSetupSession();
-  const configValues = options.configValues ?? process.env;
-  const runtimeConfig = buildRuntimeConfig(configValues);
+  const configValues: Record<string, string | undefined> = { ...(options.configValues ?? process.env) };
+  let runtimeConfig = buildRuntimeConfig(configValues);
   const guardianEnabled =
     options.guardianEnabled ?? (configValues.PHALANX_GUARDIAN_ENABLED ?? "").trim() === "1";
   const whitelistTargets = normalizeWhitelistTargets(options.whitelistTargets ?? parseWhitelistTargets(configValues));
@@ -222,6 +246,7 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
     session.pendingOwnerUserId = null;
     session.wizardStep = null;
   }
+  hydrateMemoryState(options.initialMemoryState ?? null);
 
   const fallbackNotifier: TelegramApprovalNotifier = {
     async sendApprovalRequest({ approvalId, summary }) {
@@ -251,6 +276,7 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
       buildReportFailedRuntimeEvent(sourceEvent, errorSummary),
       { skipTelegramReport: true },
     );
+    await options.stateStore?.persistRuntimeEventState(buildMemoryState("runtime_event"));
   }
 
   /**
@@ -288,6 +314,73 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
     };
   }
 
+  function refreshRuntimeConfig(): void {
+    runtimeConfig = buildRuntimeConfig(configValues);
+  }
+
+  function buildMemoryState(source: RuntimeMemoryState["source"]): RuntimeMemoryState {
+    return {
+      updatedAt: new Date().toISOString(),
+      source,
+      guardianAssessment: lastGuardianAssessment,
+      actionHistory: runtimeEvents.slice(Math.max(0, runtimeEvents.length - 10)),
+      activeProfileId: runtimeConfig.wallet.activeProfileId,
+      activeWalletId: runtimeConfig.wallet.activeWalletId,
+      pendingJobs: jobQueue.list().jobs,
+    };
+  }
+
+  function hydrateMemoryState(state: RuntimeMemoryState | null): void {
+    if (!state) {
+      return;
+    }
+    if (state.pendingJobs) {
+      jobQueue.hydrate(state.pendingJobs);
+    }
+    if (state.activeProfileId) {
+      const next = activateAgenticProfile(runtimeConfig.wallet.registry, state.activeProfileId);
+      if (next) {
+        writeRegistry(next);
+      }
+    }
+    if (state.activeWalletId) {
+      const next = activateAgenticWallet(runtimeConfig.wallet.registry, state.activeWalletId);
+      if (next) {
+        writeRegistry(next);
+      }
+    }
+    lastGuardianAssessment = state.guardianAssessment;
+  }
+
+  function writeRegistry(next: AgenticWalletRegistry): void {
+    configValues.OKX_AGENTIC_WALLET_PROFILES_JSON = serializeAgenticWalletRegistry(next);
+    refreshRuntimeConfig();
+  }
+
+  function setActiveProfile(profileId: string): { ok: boolean; summary: string } {
+    const next = activateAgenticProfile(runtimeConfig.wallet.registry, profileId);
+    if (!next) {
+      return { ok: false, summary: `Active profile update failed: ${profileId} was not found.` };
+    }
+    writeRegistry(next);
+    return {
+      ok: true,
+      summary: `Active profile set to ${runtimeConfig.wallet.activeProfileId} (${runtimeConfig.wallet.activeProfileEmail ?? "unknown"}).`,
+    };
+  }
+
+  function setActiveWallet(walletId: string): { ok: boolean; summary: string } {
+    const next = activateAgenticWallet(runtimeConfig.wallet.registry, walletId);
+    if (!next) {
+      return { ok: false, summary: `Active wallet update failed: ${walletId} was not found.` };
+    }
+    writeRegistry(next);
+    return {
+      ok: true,
+      summary: `Active wallet set to ${runtimeConfig.wallet.activeWalletId} (${runtimeConfig.wallet.activeAddress ?? "unset"}).`,
+    };
+  }
+
   async function relayCoreRuntimeEvent(event: RuntimeEvent): Promise<void> {
     let next = event;
     if (guardianDemoResumeEnrich && event.approvalId === guardianDemoResumeEnrich.approvalId) {
@@ -318,6 +411,7 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
       }
     }
     await publishRuntimeEvent(next);
+    await options.stateStore?.persistRuntimeEventState(buildMemoryState("runtime_event"));
   }
 
   async function runRebalanceDemo(input: RebalanceDemoFlowInput): Promise<RebalanceDemoFlowResult> {
@@ -365,6 +459,27 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
   }
 
   async function routeCallback(callbackData: string): Promise<TelegramCallbackResult> {
+    const queueAction = parseTelegramJobCallbackData(callbackData);
+    if (queueAction) {
+      if (queueAction.action === "cancel") {
+        const removed = jobQueue.cancel(queueAction.jobId);
+        await options.stateStore?.persistRuntimeEventState(buildMemoryState("runtime_event"));
+        return {
+          handled: Boolean(removed),
+          summary: removed
+            ? `Cancelled ${removed.id}: ${removed.summary}`
+            : `Job ${queueAction.jobId} was not found.`,
+        };
+      }
+      const editing = jobQueue.beginEdit(queueAction.jobId);
+      await options.stateStore?.persistRuntimeEventState(buildMemoryState("runtime_event"));
+      return {
+        handled: Boolean(editing),
+        summary: editing
+          ? `Editing ${editing.id}. Reply with the updated parameters / summary.`
+          : `Job ${queueAction.jobId} was not found.`,
+      };
+    }
     const parsed = parseApprovalCallbackData(callbackData);
     if (!parsed) {
       return { handled: false };
@@ -442,6 +557,7 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
       handled: true,
       decision: parsed.action,
       runtimeOutcome,
+      summary: undefined,
     };
   }
 
@@ -613,6 +729,29 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
     getGuardianLastAssessment: () => lastGuardianAssessment,
     recordTelegramReportFailure,
     getOperatorWalletSummary: readOperatorWalletSummary,
+    getTelegramJobQueue: () => jobQueue.list(),
+    enqueueTelegramJob: (summary) => {
+      const job = jobQueue.enqueue(summary);
+      void options.stateStore?.persistRuntimeEventState(buildMemoryState("runtime_event"));
+      return job;
+    },
+    applyTelegramJobEdit: (summary) => {
+      const job = jobQueue.applyEdit(summary);
+      void options.stateStore?.persistRuntimeEventState(buildMemoryState("runtime_event"));
+      return job;
+    },
+    setActiveAgenticProfile: (profileId) => {
+      const result = setActiveProfile(profileId);
+      void options.stateStore?.persistRuntimeEventState(buildMemoryState("runtime_event"));
+      return result;
+    },
+    setActiveAgenticWallet: (walletId) => {
+      const result = setActiveWallet(walletId);
+      void options.stateStore?.persistRuntimeEventState(buildMemoryState("runtime_event"));
+      return result;
+    },
+    exportMemoryState: () => buildMemoryState("restore"),
+    hydrateMemoryState,
     getLatestRebalanceDemoRunSummary: () => lastRebalanceDemoRunSummary,
     runAgenticAllocationMainlineDemo: async (guardianReason?: string) => {
       if (!demoConfig?.enabled) {

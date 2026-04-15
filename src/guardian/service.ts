@@ -13,6 +13,7 @@ import {
 } from "../adapters/onchainos.js";
 import { runGuardianCycle, type GuardianCycleResult } from "./cycle.js";
 import type { PhalanxHost } from "../app/host.js";
+import type { StateStore } from "../memory/state-store.js";
 
 export interface GuardianTickerConfig {
   readonly intervalMs: number;
@@ -24,7 +25,10 @@ export interface GuardianTickerConfig {
 export interface GuardianServiceDeps {
   readonly loadPortfolioImpl?: (env: NodeJS.ProcessEnv) => Promise<PortfolioSnapshot>;
   readonly logImpl?: (line: string) => void;
+  readonly stateStore?: StateStore;
 }
+
+export const DEFAULT_GUARDIAN_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 export async function resolveGuardianPortfolioInputs(
   env: NodeJS.ProcessEnv = process.env,
@@ -127,24 +131,42 @@ export function maybeStartGuardianFromEnv(
     return undefined;
   }
 
-  const raw = Number(env.PHALANX_GUARDIAN_INTERVAL_MS ?? "60000");
-  const intervalMs = Number.isFinite(raw) && raw >= 5_000 ? raw : 60_000;
+  const raw = Number(env.PHALANX_GUARDIAN_INTERVAL_MS ?? String(DEFAULT_GUARDIAN_INTERVAL_MS));
+  const intervalMs = Number.isFinite(raw) && raw >= 5_000 ? raw : DEFAULT_GUARDIAN_INTERVAL_MS;
+  let latestPortfolio: PortfolioSnapshot | undefined;
+  const restorePromise =
+    host && deps.stateStore
+      ? deps.stateStore.loadLatestState().then((state) => {
+          host.hydrateMemoryState(state);
+        })
+      : Promise.resolve();
 
   return startGuardianTicker(
     {
       intervalMs,
       driftThresholdBps: 500,
       getPortfolio: async () => {
+        await restorePromise;
         if (deps.loadPortfolioImpl) {
-          return deps.loadPortfolioImpl(env);
+          latestPortfolio = await deps.loadPortfolioImpl(env);
+          return latestPortfolio;
         }
-        return loadGuardianPortfolioFromOnchainos(env);
+        latestPortfolio = await loadGuardianPortfolioFromOnchainos(env);
+        return latestPortfolio;
       },
       now: () => Date.now(),
     },
     async (r) => {
       if (host) {
         await host.handleGuardianCycleResult(r);
+        if (deps.stateStore) {
+          await deps.stateStore.persistCycleState({
+            ...host.exportMemoryState(),
+            updatedAt: new Date().toISOString(),
+            source: "guardian_cycle",
+            portfolioState: latestPortfolio,
+          });
+        }
         return;
       }
       const summary = r.items.map((i) => ({

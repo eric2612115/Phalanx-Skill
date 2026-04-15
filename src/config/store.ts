@@ -1,6 +1,12 @@
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
+import {
+  normalizeAgenticWalletRegistry,
+  resolveActiveAgenticWallet,
+  type AgenticWalletRegistry,
+} from "./agentic-wallet-registry.js";
+
 export interface ConfigSnapshot {
   readonly version: number;
   readonly loadedAt: number;
@@ -92,6 +98,11 @@ export interface RuntimeConfig {
   };
   readonly wallet: {
     readonly testAddress?: string;
+    readonly activeAddress?: string;
+    readonly activeWalletId?: string;
+    readonly activeProfileId?: string;
+    readonly activeProfileEmail?: string;
+    readonly registry: AgenticWalletRegistry;
   };
   readonly flow: {
     readonly profile: FlowProfileId;
@@ -206,6 +217,17 @@ export function resolveServiceConfigPath(
   return resolve(dirname(configPath), "service.env");
 }
 
+export function resolveMemoryStatePath(
+  configPath: string,
+  baseEnv: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const explicit = normalizedRawValue(baseEnv.PHALANX_MEMORY_STATE_PATH);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  return resolve(dirname(configPath), "runtime-memory.json");
+}
+
 function loadEnvFileValues(filePath: string): Record<string, string | undefined> {
   try {
     return parseEnvFile(readFileSync(filePath, "utf8"));
@@ -294,9 +316,12 @@ export function hasOkxBootstrapCredentials(values: Readonly<Record<string, strin
 export function getExecutionWalletAddress(
   values: Readonly<Record<string, string | undefined>>,
 ): string | undefined {
+  const registry = normalizeAgenticWalletRegistry(values);
+  const active = resolveActiveAgenticWallet(registry);
   return (
     normalizedRawValue(values.PHALANX_WALLET_ADDRESS) ??
     normalizedRawValue(values.AGENT_WALLET_ADDRESS) ??
+    active.wallet?.address ??
     normalizedValue(values, "TEST_WALLET_ADDRESS")
   );
 }
@@ -387,6 +412,8 @@ export function summarizeRuntimeReadiness(
 
 export function buildRuntimeConfig(values: Readonly<Record<string, string | undefined>>): RuntimeConfig {
   const readiness = summarizeRuntimeReadiness(values);
+  const registry = normalizeAgenticWalletRegistry(values);
+  const active = resolveActiveAgenticWallet(registry);
   return {
     mode: readiness.mode,
     readiness,
@@ -416,6 +443,11 @@ export function buildRuntimeConfig(values: Readonly<Record<string, string | unde
     },
     wallet: {
       testAddress: normalizedValue(values, "TEST_WALLET_ADDRESS"),
+      activeAddress: active.wallet?.address,
+      activeWalletId: active.wallet?.walletId,
+      activeProfileId: active.profile?.profileId,
+      activeProfileEmail: active.profile?.email,
+      registry,
     },
     flow: {
       profile: resolveFlowProfile(values),

@@ -143,6 +143,78 @@ describe("telegram live transport", () => {
     expect(edited.toLowerCase()).toMatch(/approved|executed/);
   });
 
+  it("routes queue actions and active wallet changes through the live Telegram surface", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
+
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      configValues: {
+        TELEGRAM_ALLOWED_USER_ID: "7",
+        OKX_AGENTIC_WALLET_PROFILES_JSON: JSON.stringify({
+          profiles: [
+            {
+              profileId: "profile-1",
+              email: "alpha@example.com",
+              wallets: [
+                { walletId: "wallet-1", address: "0x1111111111111111111111111111111111111111" },
+                { walletId: "wallet-2", address: "0x2222222222222222222222222222222222222222" },
+              ],
+            },
+          ],
+        }),
+      },
+    });
+    const handlers = new Map<string, (ctx: any) => Promise<void>>();
+    const fakeBot = {
+      on(event: string, handler: (ctx: any) => Promise<void>) {
+        handlers.set(event, handler);
+        return this;
+      },
+      catch() {
+        return this;
+      },
+    };
+    registerTelegramBotHandlers(fakeBot as never, host);
+
+    const replies: string[] = [];
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "queue Deposit 8 USDC -> Aave Base" },
+      reply: async (text: string) => {
+        replies.push(text);
+      },
+    });
+    expect(replies[0]).toContain("Queued");
+    const jobId = host.getTelegramJobQueue().jobs[0]?.id;
+    if (!jobId) {
+      throw new Error("expected queue job");
+    }
+
+    replies.length = 0;
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "use wallet wallet-2" },
+      reply: async (text: string) => {
+        replies.push(text);
+      },
+    });
+    expect(replies[0]).toContain("Active wallet set to wallet-2");
+
+    let edited = "";
+    await handlers.get("callback_query:data")?.({
+      callbackQuery: { data: `phx_job:cancel:${jobId}` },
+      answerCallbackQuery: async () => {},
+      editMessageText: async (text: string) => {
+        edited = text;
+      },
+    });
+    expect(edited).toContain("Cancelled");
+    expect(host.getTelegramJobQueue().jobs).toHaveLength(0);
+  });
+
   it("answers private /help before claim without breaking the claim handshake", async () => {
     const { createPhalanxHost } = await import("../src/app/host.ts");
     const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");

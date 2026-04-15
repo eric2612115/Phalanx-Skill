@@ -157,9 +157,9 @@ describe("demo rebalance flow", () => {
     expect(result.swapPreparation.status).toBe("not_evaluated");
     expect(result.omRateExecutionEvidence.payment).toMatchObject({
       paymentRequired: false,
-      paymentAttempted: true,
+      paymentAttempted: false,
       paymentWrapped: true,
-      paymentSettled: true,
+      paymentSettled: false,
       baselineReady: true,
     });
   });

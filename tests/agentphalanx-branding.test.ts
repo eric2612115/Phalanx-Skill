@@ -44,11 +44,11 @@ describe("AgentPhalanx outward-facing branding", () => {
     expect(read("src/install/operator-init.ts")).toMatch(/AgentPhalanx/);
   });
 
-  it("mentions AgentPhalanx in host install guides", () => {
-    expect(read(".codex/INSTALL.md")).toMatch(/AgentPhalanx/);
-    expect(read(".openclaw/INSTALL.md")).toMatch(/AgentPhalanx/);
-    expect(read(".opencode/INSTALL.md")).toMatch(/AgentPhalanx/);
-    expect(read(".claude-plugin/INSTALL.md")).toMatch(/AgentPhalanx/);
+  it("uses shared root docs as the AI-editor entry surface", () => {
+    expect(read("README.md")).toMatch(/AGENTS\.md|CLAUDE\.md|AI editor entry/);
+    expect(read("AGENTS.md")).toMatch(/AgentPhalanx/);
+    expect(read("CLAUDE.md")).toMatch(/AgentPhalanx/);
+    expect(read("docs/agent-pack/DECISIONS.md")).toMatch(/shared root docs|README\.md|AGENTS\.md|CLAUDE\.md/);
   });
 
   it("keeps MCP example wiring on PHALANX_* env keys for compatibility", () => {

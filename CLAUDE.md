@@ -18,3 +18,4 @@ This repository is an **active** self-custodial, local-first action-plane implem
 - Run `npm run test` before claiming a behavior change is done.
 - Use the shared OmRate root rules for cross-repo boundaries and sync triggers when ownership or trust boundaries change.
 - Keep the deposit live mainline stable; the `deposit -> tokenId discovery -> withdraw` roundtrip is live-proven, so treat `withdraw` as re-verified rather than as an unfinished enhancement.
+- Prefer the shared root docs (`README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/agent-pack/*`) over per-host prompt folders.

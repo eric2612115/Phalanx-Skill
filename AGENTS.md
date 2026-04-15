@@ -31,7 +31,7 @@ npm run dev
 
 - Keep `src/app/host.ts` as a composition root.
 - Do not hide policy or governance decisions inside adapters.
-- Prefer thin host-specific docs that route back to SSOT.
+- Prefer shared root routers and one SSOT over host-specific prompt folders.
 - Treat `config.env` as local-only; never commit real secrets.
 - Treat the live `deposit -> tokenId discovery -> withdraw` roundtrip as verified; do not overclaim richer LP reporting beyond what the README and runbook currently state.
 - Protect the already-proven deposit live mainline from regression.

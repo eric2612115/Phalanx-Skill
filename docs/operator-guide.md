@@ -263,9 +263,11 @@ Normal operators do **not** need per-host prompt folders to run AgentPhalanx.
 
 If you are **developing** this repo inside an AI editor:
 
-- read [`docs/agent-pack/DECISIONS.md`](agent-pack/DECISIONS.md) first (support matrix and SSOT)
-- thin host guides (optional): `.claude-plugin/INSTALL.md`, `.codex/INSTALL.md`, `.openclaw/INSTALL.md`, `.opencode/INSTALL.md`
-- Cursor governance: `.cursor/rules/` and `.cursor/hooks.json`
+- start from root `README.md`
+- then read `AGENTS.md` or `CLAUDE.md`
+- then read [`docs/agent-pack/DECISIONS.md`](agent-pack/DECISIONS.md) for the shared support matrix and SSOT
+- use `.cursor/rules/` and `.cursor/hooks.json` only when your host can read Cursor-native guidance directly
+- use `.mcp.json.example` when you want MCP wiring
 
 ## MCP
 

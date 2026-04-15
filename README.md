@@ -42,6 +42,16 @@ npm run smoke:live
 npm run guard:ai
 ```
 
+## AI editor entry
+
+If you open this repo in Cursor, Claude Code, Codex-compatible tools, or another AI editor, start from:
+
+- `README.md` for product context
+- `AGENTS.md` or `CLAUDE.md` for repo routing
+- `docs/agent-pack/DECISIONS.md` for the shared support matrix and SSOT
+- `.cursor/rules/` only when the host understands Cursor rules directly
+- `.mcp.json.example` if you want MCP wiring
+
 ## Documentation links
 
 | Doc | Purpose |

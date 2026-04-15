@@ -4,11 +4,11 @@
 
 | Host | Status | Install mode | Notes |
 |---|---|---|---|
-| Cursor | Supported now | Manual repo checkout + existing `.cursor/` assets | No fake `.cursor-plugin` metadata |
-| Claude Code | Supported now | Manual repo checkout + root router docs | `.claude-plugin/INSTALL.md` is documentation only, not a claimed marketplace package |
-| OpenAI Codex CLI | Supported now | Manual repo checkout + thin host guide | Uses repo docs plus optional MCP wiring |
-| OpenClaw | Supported now | Manual repo checkout + thin host guide | Manual setup only |
-| OpenCode | Supported now | Manual repo checkout + thin host guide | Manual setup only |
+| Cursor | Supported now | Manual repo checkout + shared root docs | `.cursor/` stays as the only editor-native rule bundle |
+| Claude Code | Supported now | Manual repo checkout + shared root docs | Use `README.md` + `CLAUDE.md` + shared docs |
+| OpenAI Codex CLI | Supported now | Manual repo checkout + shared root docs | Use `README.md` + `AGENTS.md` + shared docs |
+| OpenClaw | Supported now | Manual repo checkout + shared root docs | Use shared root docs rather than host-specific install wrappers |
+| OpenCode | Supported now | Manual repo checkout + shared root docs | Use shared root docs rather than host-specific install wrappers |
 | Generic MCP-capable client | Supported now | Example config via `.mcp.json.example` | Uses the real stdio server entrypoint |
 
 ## Installable vs publishable
@@ -23,9 +23,10 @@ The primary install story for this phase is:
 
 1. clone the repo
 2. run `npm install`
-3. read `docs/agent-pack/GOVERNANCE.md`
-4. follow the relevant host `INSTALL.md`
-5. verify with `npm run guard:ai`
+3. read `README.md`
+4. read `AGENTS.md` or `CLAUDE.md`
+5. read `docs/agent-pack/GOVERNANCE.md`
+6. verify with `npm run guard:ai`
 
 This phase does **not** promise a registry-backed one-command installer.
 
@@ -52,14 +53,11 @@ docs/
     DECISIONS.md
     GOVERNANCE.md
     PRE_MERGE_CHECKLIST.md
-.codex/
-  INSTALL.md
-.openclaw/
-  INSTALL.md
-.opencode/
-  INSTALL.md
-.claude-plugin/
-  INSTALL.md
+.cursor/
+  rules/
+  hooks.json
+.agents/
+  skills/
 AGENTS.md
 CLAUDE.md
 .mcp.json.example
@@ -69,8 +67,9 @@ package.json
 
 ## Rejected or deferred formats
 
-- `.cursor-plugin/` is deferred because no stable, documented packaging format was verified in this session. Cursor is supported through the checked-in `.cursor/rules/` and `.cursor/hooks.json` assets plus README instructions.
-- Claude marketplace/plugin automation is deferred. `.claude-plugin/INSTALL.md` is a thin manual-install guide, not a claim of marketplace compatibility.
+- `.cursor-plugin/` is deferred because no stable, documented packaging format was verified in this session. Cursor is supported through the checked-in `.cursor/rules/` and `.cursor/hooks.json` assets plus root docs.
+- Host-specific thin install wrappers (`.claude-plugin/`, `.codex/`, `.openclaw/`, `.opencode/`) are intentionally removed from the product-facing root because they duplicated the same instructions and made the repo look like a host compatibility dump.
+- The old multi-host `skills` symlink farm (`.claude/`, `.continue/`, `.roo/`, etc.) is intentionally removed. Shared continuation context now lives in `README.md`, `AGENTS.md`, `CLAUDE.md`, and `docs/agent-pack/*`.
 - npm publishing metadata is intentionally not expanded into a release promise until package ownership, release policy, and public tarball boundaries are explicitly approved.
 
 ## Packaging constraints

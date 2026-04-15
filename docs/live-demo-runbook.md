@@ -109,6 +109,10 @@ npm run build
 npm run guard:ai
 ```
 
+## Smoke: allocation mainline
+
+`npm run smoke:allocation-mainline` is stricter than readiness smoke: it expects the proactive allocation story to be enabled. Set `PHALANX_AGENTIC_REBALANCE_DEMO_ENABLED=1` (and a compatible `PHALANX_FLOW_PROFILE` when you use that lane) before running it, or the script may exit early by design.
+
 ## Before Real Execution
 
 Before asking AgentPhalanx to execute real actions:
@@ -170,7 +174,7 @@ Check:
 
 ### `409 Conflict`
 
-Usually means more than one process is polling the same bot token.
+Usually means more than one process is polling the same bot token. Telegram long polling may surface this as a `409 Conflict` when two runtimes compete for `getUpdates` on the same token.
 
 Check:
 

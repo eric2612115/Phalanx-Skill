@@ -2,7 +2,8 @@
 
 ## Start Here
 
-- `README.md` — product overview, install path, Telegram onboarding, config split
+- `README.md` — short landing page (quick start + copy-paste)
+- `docs/operator-guide.md` — full operator setup, Telegram flow, config, x402, commands
 - `docs/live-demo-runbook.md` — operator runbook and runtime checks
 
 ## Product / Operator Docs

@@ -86,21 +86,38 @@ export function extractRuntimeTxRefs(adapterResult: unknown): readonly string[] 
     return undefined;
   }
   const record = adapterResult as Record<string, unknown>;
+  const txRefs = new Set<string>();
   if (Array.isArray(record.txRefs)) {
-    const txRefs = record.txRefs.filter((item): item is string => typeof item === "string" && item.length > 0);
-    return txRefs.length > 0 ? txRefs : undefined;
+    for (const txRef of record.txRefs.filter((item): item is string => typeof item === "string" && item.length > 0)) {
+      txRefs.add(txRef);
+    }
   }
   if (typeof record.txHash === "string" && record.txHash.length > 0) {
-    return [record.txHash];
+    txRefs.add(record.txHash);
   }
   if (Array.isArray(record.broadcasts)) {
-    const txRefs = record.broadcasts
+    const broadcastTxRefs = record.broadcasts
       .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
       .map((item) => (typeof item.txHash === "string" ? item.txHash : undefined))
       .filter((item): item is string => Boolean(item));
-    return txRefs.length > 0 ? txRefs : undefined;
+    for (const txRef of broadcastTxRefs) {
+      txRefs.add(txRef);
+    }
   }
-  return undefined;
+  const executionEvidence = record.executionEvidence;
+  if (executionEvidence && typeof executionEvidence === "object") {
+    const payment = (executionEvidence as Record<string, unknown>).payment;
+    if (payment && typeof payment === "object") {
+      const receipt = (payment as Record<string, unknown>).receipt;
+      if (receipt && typeof receipt === "object") {
+        const settlementTxHash = (receipt as Record<string, unknown>).settlementTxHash;
+        if (typeof settlementTxHash === "string" && settlementTxHash.length > 0) {
+          txRefs.add(settlementTxHash);
+        }
+      }
+    }
+  }
+  return txRefs.size > 0 ? [...txRefs] : undefined;
 }
 
 export function extractRuntimeExecutionEvidence(adapterResult: unknown): ExecutionEvidence | undefined {

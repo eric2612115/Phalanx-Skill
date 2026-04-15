@@ -1,4 +1,5 @@
 import { executeOnchainosX402Payment, type OnchainosX402PaymentResult } from "./onchainos.js";
+import { resolveX402SettlementEvidence } from "./x402-settlement.js";
 import { buildExactEvmX402PaymentProof, decodePaymentRequiredHeader, parseOnchainosX402PaymentStdout } from "./x402.js";
 import { createOnchainosX402BalanceProbe, type X402BalanceProbe } from "./x402-balance-probe.js";
 import { selectBestX402Accept } from "./x402-accept-selection.js";
@@ -48,6 +49,8 @@ export interface ExecuteAgenticX402HttpRequestDeps {
     env: NodeJS.ProcessEnv,
   ) => Promise<OnchainosX402PaymentResult>;
   readonly balanceProbe?: X402BalanceProbe;
+  readonly settlementPollDelaysMs?: readonly number[];
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 function preview(text: string, max = 800): string {
@@ -254,6 +257,16 @@ export async function executeAgenticX402HttpRequest(
     headers: replayHeaders,
   });
   const replayBody = await replay.text();
+  const paymentResponse = replay.headers.get("PAYMENT-RESPONSE") ?? undefined;
+  const paymentId = replay.headers.get("X-PAYMENT-ID") ?? undefined;
+  const settlement = await resolveX402SettlementEvidence({
+    requestUrl: input.url,
+    paymentResponseHeader: paymentResponse,
+    paymentIdHeader: paymentId,
+    fetchImpl,
+    pollDelaysMs: deps.settlementPollDelaysMs,
+    sleep: deps.sleep,
+  });
   const selection: AgenticX402PaymentSelection = {
     network: selected.accept.network,
     asset: selected.accept.asset,
@@ -285,8 +298,14 @@ export async function executeAgenticX402HttpRequest(
       walletSource: selection.walletSource,
       selectedNetwork: selection.network,
       selectedAsset: selection.asset,
-      paymentResponse: replay.headers.get("PAYMENT-RESPONSE") ?? undefined,
-      paymentId: replay.headers.get("X-PAYMENT-ID") ?? undefined,
+      paymentResponse,
+      paymentId: settlement?.paymentId ?? paymentId ?? undefined,
+      settlementMode: settlement?.settlementMode,
+      settlementStatus: settlement?.settlementStatus,
+      settlementTxHash: settlement?.settlementTxHash,
+      settlementNetwork: settlement?.settlementNetwork,
+      settlementExplorerUrl: settlement?.settlementExplorerUrl,
+      settlementSource: settlement?.settlementSource,
     },
   };
 }

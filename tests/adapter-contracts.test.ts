@@ -267,7 +267,21 @@ describe("omrate adapter (contract)", () => {
       .mockResolvedValueOnce(
         new Response('{"ok":true}', {
           status: 200,
-          headers: { "PAYMENT-RESPONSE": "paid_x402", "X-PAYMENT-ID": "payment-123" },
+          headers: {
+            "PAYMENT-RESPONSE": Buffer.from(
+              JSON.stringify({
+                billing_mode: "x402",
+                payment_required: false,
+                payment_id: "payment-123",
+                settlement_mode: "sync",
+                settlement_tx_hash: "0xsettled",
+                settlement_network: "eip155:196",
+                reason_code: "paid_x402",
+              }),
+              "utf8",
+            ).toString("base64"),
+            "X-PAYMENT-ID": "payment-123",
+          },
         }),
       );
 
@@ -323,6 +337,11 @@ describe("omrate adapter (contract)", () => {
     expect(r.paymentRequiredByServer).toBe(true);
     expect(r.paymentWrapped).toBe(true);
     expect(r.fetchSummary).toContain("agentic_x402");
+    expect(r.paymentReceipt).toMatchObject({
+      paymentId: "payment-123",
+      settlementTxHash: "0xsettled",
+      settlementNetwork: "eip155:196",
+    });
   });
 
   it("summarizeOmRateAdapterEnv reflects base and key presence", () => {

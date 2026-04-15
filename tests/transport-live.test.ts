@@ -1,6 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { createSetupSession } from "../src/telegram/setup.js";
 
 describe("telegram live transport", () => {
+  it("live smoke synthetic mode requires TELEGRAM_ALLOWED_USER_ID before runtime work", async () => {
+    const { resolveLiveSmokeSyntheticAllowedUserId } = await import("../scripts/live-smoke.ts");
+
+    expect(() =>
+      resolveLiveSmokeSyntheticAllowedUserId({
+        PHALANX_SMOKE_SYNTHETIC_READY: "1",
+      }),
+    ).toThrow(/TELEGRAM_ALLOWED_USER_ID/i);
+
+    expect(
+      resolveLiveSmokeSyntheticAllowedUserId({
+        PHALANX_SMOKE_SYNTHETIC_READY: "1",
+        TELEGRAM_ALLOWED_USER_ID: " 42 ",
+      }),
+    ).toBe("42");
+
+    expect(resolveLiveSmokeSyntheticAllowedUserId({})).toBeUndefined();
+  });
+
   it("telegram approval smoke can force READY from operator-ready live config", async () => {
     const { resolveTelegramApprovalSmokeLifecycle } = await import("../scripts/telegram-approval-live-smoke.ts");
 
@@ -68,7 +88,9 @@ describe("telegram live transport", () => {
     const { createPhalanxHost } = await import("../src/app/host.ts");
     const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
 
-    const claimHost = createPhalanxHost();
+    const claimHost = createPhalanxHost({
+      setupSession: createSetupSession({ envAllowedUserId: "7" }),
+    });
     const approvalHost = createPhalanxHost({ lifecycle: "READY", whitelistTargets: ["whitelist-admin"] });
     await approvalHost.invokeMcp("phalanx_action", {
       action: "requestWhitelistExpansion",
@@ -121,6 +143,207 @@ describe("telegram live transport", () => {
     expect(edited.toLowerCase()).toMatch(/approved|executed/);
   });
 
+  it("answers private /help before claim without breaking the claim handshake", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
+
+    const claimHost = createPhalanxHost({
+      setupSession: createSetupSession({ envAllowedUserId: "7" }),
+    });
+
+    const handlers = new Map<string, (ctx: any) => Promise<void>>();
+    const fakeBot = {
+      on(event: string, handler: (ctx: any) => Promise<void>) {
+        handlers.set(event, handler);
+        return this;
+      },
+      catch() {
+        return this;
+      },
+    };
+
+    registerTelegramBotHandlers(fakeBot as never, claimHost);
+
+    const replies: Array<{ text: string; extra?: { reply_markup?: unknown } }> = [];
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "/help" },
+      reply: async (text: string, extra?: { reply_markup?: unknown }) => {
+        replies.push({ text, extra });
+      },
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.text).toMatch(/AgentPhalanx/i);
+    expect(replies[0]?.text.toLowerCase()).toMatch(/not an open-ended|keyword/);
+    expect(replies[0]?.extra?.reply_markup).toBeTruthy();
+
+    replies.length = 0;
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "claim" },
+      reply: async (text: string) => {
+        replies.push({ text });
+      },
+    });
+    expect(replies.map((entry) => entry.text).join(" ")).toMatch(/confirm/i);
+  });
+
+  it("answers private /start before claim with onboarding + FAQ keyboard", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
+
+    const claimHost = createPhalanxHost({
+      setupSession: createSetupSession({ envAllowedUserId: "7" }),
+    });
+
+    const handlers = new Map<string, (ctx: any) => Promise<void>>();
+    const fakeBot = {
+      on(event: string, handler: (ctx: any) => Promise<void>) {
+        handlers.set(event, handler);
+        return this;
+      },
+      catch() {
+        return this;
+      },
+    };
+
+    registerTelegramBotHandlers(fakeBot as never, claimHost);
+
+    const replies: Array<{ text: string; extra?: { reply_markup?: unknown } }> = [];
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "/start" },
+      reply: async (text: string, extra?: { reply_markup?: unknown }) => {
+        replies.push({ text, extra });
+      },
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.text).toMatch(/AgentPhalanx/i);
+    expect(replies[0]?.text).toMatch(/\/claim/i);
+    expect(replies[0]?.text).toMatch(/FAQ|docs|source/i);
+    expect(replies[0]?.extra?.reply_markup).toBeTruthy();
+  });
+
+  it("answers supported FAQ prompts before claim using the document-grounded FAQ layer", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
+
+    const claimHost = createPhalanxHost({
+      setupSession: createSetupSession({ envAllowedUserId: "7" }),
+    });
+
+    const handlers = new Map<string, (ctx: any) => Promise<void>>();
+    const fakeBot = {
+      on(event: string, handler: (ctx: any) => Promise<void>) {
+        handlers.set(event, handler);
+        return this;
+      },
+      catch() {
+        return this;
+      },
+    };
+
+    registerTelegramBotHandlers(fakeBot as never, claimHost);
+
+    const replies: Array<{ text: string; extra?: { reply_markup?: unknown } }> = [];
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "Why is OTP required?" },
+      reply: async (text: string, extra?: { reply_markup?: unknown }) => {
+        replies.push({ text, extra });
+      },
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.text).toMatch(/OTP/i);
+    expect(replies[0]?.text).toMatch(/wallet/i);
+    expect(replies[0]?.text).toMatch(/README\.md|live-demo-runbook/i);
+    expect(replies[0]?.extra?.reply_markup).toBeTruthy();
+  });
+
+  it("does not treat READY-state operator shortcut buttons as implicit owner-claim text before claim", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
+
+    const claimHost = createPhalanxHost({
+      setupSession: createSetupSession({ envAllowedUserId: "7" }),
+    });
+
+    const handlers = new Map<string, (ctx: any) => Promise<void>>();
+    const fakeBot = {
+      on(event: string, handler: (ctx: any) => Promise<void>) {
+        handlers.set(event, handler);
+        return this;
+      },
+      catch() {
+        return this;
+      },
+    };
+
+    registerTelegramBotHandlers(fakeBot as never, claimHost);
+
+    const replies: Array<{ text: string; extra?: { reply_markup?: unknown } }> = [];
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "status" },
+      reply: async (text: string, extra?: { reply_markup?: unknown }) => {
+        replies.push({ text, extra });
+      },
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.text).toMatch(/\/claim/i);
+    expect(replies[0]?.text.toLowerCase()).toMatch(/before ready|finish setup|claim first|not ready/i);
+    expect(replies[0]?.text).not.toMatch(/candidate accepted/i);
+    expect(replies[0]?.extra?.reply_markup).toBeTruthy();
+  });
+
+  it("does not swallow setup-wizard input with pre-ready operator shortcut interception after claim", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
+
+    const session = createSetupSession({ envAllowedUserId: "7" });
+    session.lifecycle = "SETUP_IN_PROGRESS";
+    session.ownerUserId = "7";
+    session.wizardStep = "collect_omrate";
+
+    const host = createPhalanxHost({ setupSession: session });
+
+    const handlers = new Map<string, (ctx: any) => Promise<void>>();
+    const fakeBot = {
+      on(event: string, handler: (ctx: any) => Promise<void>) {
+        handlers.set(event, handler);
+        return this;
+      },
+      catch() {
+        return this;
+      },
+    };
+
+    registerTelegramBotHandlers(fakeBot as never, host);
+
+    const replies: string[] = [];
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "OMRATE_API_KEY=status-feed" },
+      reply: async (text: string) => {
+        replies.push(text);
+      },
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.toLowerCase()).toMatch(/step saved|saved/i);
+    expect(replies[0]?.toLowerCase()).not.toMatch(/claim first|finish setup before using ready-state/i);
+  });
+
   it("routes READY-state operator text through the bounded catalog", async () => {
     const { createPhalanxHost } = await import("../src/app/host.ts");
     const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
@@ -162,6 +385,50 @@ describe("telegram live transport", () => {
 
     expect(replies.length).toBeGreaterThan(0);
     expect(replies.join("\n").toLowerCase()).toMatch(/ready|lifecycle|pending|guidance|mode/i);
+  });
+
+  it("answers private help alias in READY state without requiring a catalog keyword", async () => {
+    const { createPhalanxHost } = await import("../src/app/host.ts");
+    const { registerTelegramBotHandlers } = await import("../src/telegram/live.ts");
+    const { createSetupSession } = await import("../src/telegram/setup.ts");
+
+    const session = createSetupSession();
+    session.lifecycle = "READY";
+    session.ownerUserId = "7";
+    session.wizardStep = null;
+
+    const host = createPhalanxHost({
+      lifecycle: "READY",
+      setupSession: session,
+      whitelistTargets: ["pool"],
+    });
+
+    const handlers = new Map<string, (ctx: any) => Promise<void>>();
+    const fakeBot = {
+      on(event: string, handler: (ctx: any) => Promise<void>) {
+        handlers.set(event, handler);
+        return this;
+      },
+      catch() {
+        return this;
+      },
+    };
+
+    registerTelegramBotHandlers(fakeBot as never, host);
+
+    const replies: Array<{ text: string; extra?: { reply_markup?: unknown } }> = [];
+    await handlers.get("message:text")?.({
+      from: { id: 7 },
+      chat: { id: 7, type: "private" },
+      message: { text: "help" },
+      reply: async (text: string, extra?: { reply_markup?: unknown }) => {
+        replies.push({ text, extra });
+      },
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.text).toMatch(/AgentPhalanx/i);
+    expect(replies[0]?.extra?.reply_markup).toBeTruthy();
   });
 
   it("can bind a real notifier and produce a whitelist-change approval for smoke scripts", async () => {

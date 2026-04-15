@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { parseOnchainosWalletAddressesStdout } from "../src/adapters/onchainos.ts";
 
@@ -178,6 +178,61 @@ describe("skill-backed executor", () => {
       lane: "defi_execute",
       status: "tool_missing",
     });
+  });
+
+  it("does not invoke LP execution when live wallet resolution fails", async () => {
+    vi.resetModules();
+    const executeLpPositionIntent = vi.fn(async () => ({
+      provider: "onchainos",
+      lane: "defi_execute",
+      status: "tool_missing",
+    }));
+    vi.doMock("../src/adapters/lp-execution.ts", async () => {
+      const actual = await vi.importActual<typeof import("../src/adapters/lp-execution.ts")>(
+        "../src/adapters/lp-execution.ts",
+      );
+      return {
+        ...actual,
+        executeLpPositionIntent,
+      };
+    });
+
+    const { createSkillBackedExecutor } = await import("../src/executors/skill-backed.ts");
+    const executor = createSkillBackedExecutor({
+      env: {
+        PATH: "/definitely/missing",
+        PHALANX_RUNTIME_MODE: "live",
+      } as NodeJS.ProcessEnv,
+      resolveExecutionWalletAddressImpl: async () => undefined,
+    });
+
+    const result = await executor.execute({
+      id: "i6b",
+      lane: "execution",
+      action: "withdrawLpPosition",
+      payload: {
+        protocol: "pancakeswap-v3",
+        investmentId: "pancake-bsc-bnb-usdt-v3",
+        chain: "bsc",
+        tokenId: "12345",
+        ratio: "1",
+      },
+      entrySource: "mcp",
+      target: "pancakeswap-v3",
+    });
+
+    expect(executeLpPositionIntent).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      mode: "execution_wallet_unresolved",
+      code: "EXECUTION_WALLET_UNRESOLVED",
+      action: "withdrawLpPosition",
+      chain: "bsc",
+    });
+    const ev = result as { executionEvidence?: { wallet?: { reason?: string } } };
+    expect(ev.executionEvidence?.wallet?.reason).toMatch(/managed|live_mode_missing/);
+
+    vi.doUnmock("../src/adapters/lp-execution.ts");
+    vi.resetModules();
   });
 
   it("uses onchainos wallet send for withdrawToOwner intents", async () => {
@@ -367,6 +422,68 @@ describe("skill-backed executor", () => {
       action: "swap",
       chain: "base",
     });
+    const ev = result as { executionEvidence?: { wallet?: { reason?: string } } };
+    expect(ev.executionEvidence?.wallet?.reason).toMatch(/managed|live_mode_missing/);
+  });
+
+  it("attaches executionEvidence with managed wallet source for live swap when managed resolves", async () => {
+    const { createSkillBackedExecutor } = await import("../src/executors/skill-backed.ts");
+    const managed = "0xcccccccccccccccccccccccccccccccccccccccc";
+    const executor = createSkillBackedExecutor({
+      env: {
+        PATH: "/definitely/missing",
+        PHALANX_RUNTIME_MODE: "live",
+      } as NodeJS.ProcessEnv,
+      resolveExecutionWalletAddressImpl: async () => managed,
+    });
+    const result = await executor.execute({
+      id: "i-ev-1",
+      lane: "execution",
+      action: "swap",
+      payload: {
+        fromTokenAddress: "0x1111111111111111111111111111111111111111",
+        toTokenAddress: "0x2222222222222222222222222222222222222222",
+        readableAmount: "1.5",
+        chain: "base",
+      },
+      entrySource: "mcp",
+      target: "uniswap-v3",
+    });
+    const ev = result as { executionEvidence?: { wallet?: { source: string } } };
+    expect(ev.executionEvidence?.wallet?.source).toBe("managed");
+  });
+
+  it("treats payload wallet as explicit payload input, not env override", async () => {
+    const { createSkillBackedExecutor } = await import("../src/executors/skill-backed.ts");
+
+    const executor = createSkillBackedExecutor({
+      env: {
+        PATH: "/definitely/missing",
+        PHALANX_RUNTIME_MODE: "live",
+        PHALANX_WALLET_ADDRESS: "0xdddddddddddddddddddddddddddddddddddddddd",
+      } as NodeJS.ProcessEnv,
+      resolveExecutionWalletAddressImpl: async () => "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    });
+
+    const result = await executor.execute({
+      id: "i-ev-2",
+      lane: "execution",
+      action: "swap",
+      payload: {
+        fromTokenAddress: "0x1111111111111111111111111111111111111111",
+        toTokenAddress: "0x2222222222222222222222222222222222222222",
+        readableAmount: "1.5",
+        chain: "base",
+        wallet: "0xffffffffffffffffffffffffffffffffffffffff",
+      },
+      entrySource: "mcp",
+      target: "uniswap-v3",
+    });
+
+    const ev = result as { executionEvidence?: { wallet?: { source?: string; reason?: string; overrideActive?: boolean } } };
+    expect(ev.executionEvidence?.wallet?.source).toBe("explicit_override");
+    expect(ev.executionEvidence?.wallet?.reason).toBe("payload_wallet_address_provided");
+    expect(ev.executionEvidence?.wallet?.overrideActive).toBe(false);
   });
 });
 

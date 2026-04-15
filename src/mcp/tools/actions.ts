@@ -35,7 +35,7 @@ function rollbackPendingApproval(
   if (!rec) {
     return;
   }
-  router.remove(approvalId);
+  router.deleteOpen(approvalId);
   pendingOps.release(rec.fingerprint);
 }
 

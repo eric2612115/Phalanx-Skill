@@ -726,4 +726,111 @@ describe("uniswap v3 direct execution lane", () => {
     expect(calls[0]?.join(" ")).toContain("onchainos defi invest");
     expect(calls.some((entry) => entry[1] === "wallet" && entry[2] === "contract-call")).toBe(true);
   });
+
+  it("returns LP_WALLET_UNRESOLVED for direct uniswap live execution when no wallet can be resolved", async () => {
+    const result = await executeLpPositionIntent(
+      "depositLpPosition",
+      {
+        protocol: "uniswap-v3",
+        poolAddress: "0x1111111111111111111111111111111111111111",
+        chain: "base",
+        token: "USDC",
+        amount: "1370428",
+        tokenSecondary: "ETH",
+        amountSecondary: "592218288409166",
+        tickLower: "-199560",
+        tickUpper: "-199200",
+      },
+      {
+        PHALANX_RUNTIME_MODE: "live",
+      } as NodeJS.ProcessEnv,
+      "uniswap-v3",
+      {
+        resolveExecutionWalletAddressImpl: async () => undefined,
+      } as never,
+    );
+
+    expect(result).toMatchObject({
+      mode: "lp_execution_invalid",
+      code: "LP_WALLET_UNRESOLVED",
+    });
+  });
+
+  it("uses TEST_WALLET_ADDRESS for direct uniswap dry-run execution when payload address is absent", async () => {
+    const calls: string[][] = [];
+    const result = await executeLpPositionIntent(
+      "depositLpPosition",
+      {
+        protocol: "uniswap-v3",
+        poolAddress: "0x1111111111111111111111111111111111111111",
+        chain: "base",
+        token: "USDC",
+        amount: "1370428",
+        tokenSecondary: "ETH",
+        amountSecondary: "592218288409166",
+        tickLower: "-199560",
+        tickUpper: "-199200",
+      },
+      {
+        TEST_WALLET_ADDRESS: "0xc9cad2450ab7155f2c40a87da32f9ab67cfefe93",
+      } as NodeJS.ProcessEnv,
+      "uniswap-v3",
+      {
+        readUniswapPoolMetadataImpl: async () => ({
+          contract: NPM,
+          fee: 3000,
+          tokens: [
+            {
+              poolAddress: "0x4200000000000000000000000000000000000006",
+              symbol: "ETH",
+              native: true,
+              originalAddress: "0x4200000000000000000000000000000000000006",
+            },
+            {
+              poolAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+              approvalAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+              symbol: "USDC",
+              native: false,
+              originalAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            },
+          ],
+        }),
+        resolveExecutionWalletAddressImpl: async () => undefined,
+        runCmdImpl: async (command, args) => {
+          calls.push([command, ...args]);
+          if (args[0] === "wallet" && args[1] === "contract-call") {
+            return {
+              argv: [command, ...args],
+              ok: true,
+              exitCode: 0,
+              stdout: JSON.stringify({
+                ok: true,
+                data: {
+                  txHash: args.some((arg) => arg.startsWith("0x095ea7b3")) ? "0xapprove" : "0xmint",
+                },
+              }),
+              stderr: "",
+            };
+          }
+          if (args[0] === "wallet" && args[1] === "history") {
+            const txHash = args[args.indexOf("--tx-hash") + 1];
+            return {
+              argv: [command, ...args],
+              ok: true,
+              exitCode: 0,
+              stdout: JSON.stringify({ ok: true, data: [{ txHash, txStatus: "SUCCESS" }] }),
+              stderr: "",
+            };
+          }
+          throw new Error(`unexpected call ${[command, ...args].join(" ")}`);
+        },
+        delayImpl: async () => {},
+        nowSecondsImpl: () => 1_775_962_100,
+      } as never,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.executedSteps?.[0]?.from).toBe("0xc9cad2450ab7155f2c40a87da32f9ab67cfefe93");
+    expect(result.executedSteps?.[1]?.from).toBe("0xc9cad2450ab7155f2c40a87da32f9ab67cfefe93");
+  });
 });

@@ -1,5 +1,6 @@
 import type { PhalanxHost } from "../../app/host.js";
 import type { RebalanceDemoRunMetadata } from "../../demo/rebalance-flow.js";
+import type { ExecutionEvidence } from "../../runtime/execution-evidence.js";
 import type { RuntimeEventStage } from "../../runtime/events.js";
 
 export interface OperatorEventEntry {
@@ -17,6 +18,7 @@ export interface OperatorEventEntry {
   readonly correlationId: string;
   readonly intentId: string;
   readonly demoRun?: RebalanceDemoRunMetadata;
+  readonly executionEvidence?: ExecutionEvidence;
 }
 
 export interface OperatorEventSnapshot {
@@ -45,6 +47,7 @@ export async function fetchOperatorEventSnapshot(
     correlationId: e.correlationId,
     intentId: e.intentId,
     demoRun: e.demoRun,
+    executionEvidence: e.executionEvidence,
   }));
   return { limit, items };
 }

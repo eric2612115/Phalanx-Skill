@@ -5,8 +5,9 @@ import type { RiskEngine } from "../risk/engine.js";
 import type { ApprovalPolicy } from "../policy/approval-policy.js";
 import { fingerprintForPending, isStateChangingAction } from "./intents.js";
 import { ApprovalRouter } from "./approval-router.js";
+import { inferExecutionSegment } from "./approval-resume.js";
 import { PendingOperationsTracker } from "./pending-operations.js";
-import { buildRuntimeEvent, extractRuntimeTxRefs, type RuntimeEvent } from "./events.js";
+import { buildRuntimeEvent, extractRuntimeExecutionEvidence, extractRuntimeTxRefs, type RuntimeEvent } from "./events.js";
 
 export interface ExecutionAdapter {
   execute(intent: RuntimeIntent): Promise<unknown>;
@@ -114,7 +115,10 @@ export class RuntimeCore {
       }
       let pending;
       try {
-        pending = this.deps.approvalRouter.createPending(intent, fp);
+        pending = this.deps.approvalRouter.createPending(intent, fp, {
+          originatingIntentId: intent.id,
+          executionSegment: inferExecutionSegment(intent),
+        });
       } catch (error) {
         this.deps.pendingOps.release(fp);
         throw error;
@@ -154,6 +158,7 @@ export class RuntimeCore {
           buildRuntimeEvent(intent, "executed", {
             summary: `Executed ${intent.action}`,
             txRefs: extractRuntimeTxRefs(adapterResult),
+            executionEvidence: extractRuntimeExecutionEvidence(adapterResult),
           }),
         );
         return { type: "executed", intentId: intent.id, adapterResult };
@@ -167,6 +172,7 @@ export class RuntimeCore {
       buildRuntimeEvent(intent, "executed", {
         summary: `Executed ${intent.action}`,
         txRefs: extractRuntimeTxRefs(adapterResult),
+        executionEvidence: extractRuntimeExecutionEvidence(adapterResult),
       }),
     );
     return { type: "executed", intentId: intent.id, adapterResult };
@@ -176,8 +182,10 @@ export class RuntimeCore {
    * After external approval, re-run policy and risk then execute. Releases pending fingerprint on completion.
    */
   async submitApprovalDecision(approvalId: string, approved: boolean): Promise<RuntimeOutcome> {
-    const rec = this.deps.approvalRouter.get(approvalId);
-    if (rec === undefined) {
+    const now = Date.now();
+    const inspected = this.deps.approvalRouter.inspectApproval(approvalId, now);
+
+    if (inspected.kind === "missing") {
       return {
         type: "rejected",
         intentId: "",
@@ -186,11 +194,40 @@ export class RuntimeCore {
       };
     }
 
+    if (inspected.kind === "consumed") {
+      return {
+        type: "rejected",
+        intentId: "",
+        code: "APPROVAL_ALREADY_CONSUMED",
+        message: "This approval was already resolved and cannot be reused",
+      };
+    }
+
+    if (inspected.kind === "expired_open") {
+      const rec = inspected.record;
+      this.deps.approvalRouter.consume(approvalId, "expired");
+      this.deps.pendingOps.release(rec.fingerprint);
+      await this.emitEvent(
+        buildRuntimeEvent(rec.intent, "rejected", {
+          approvalId,
+          summary: "Approval expired before resume",
+          reason: "APPROVAL_EXPIRED",
+        }),
+      );
+      return {
+        type: "rejected",
+        intentId: rec.intent.id,
+        code: "APPROVAL_EXPIRED",
+        message: "Approval request expired; submit a new intent",
+      };
+    }
+
+    const rec = inspected.record;
     const intent = rec.intent;
     const fp = rec.fingerprint;
 
     if (!approved) {
-      this.deps.approvalRouter.remove(approvalId);
+      this.deps.approvalRouter.consume(approvalId, "rejected");
       this.deps.pendingOps.release(fp);
       await this.emitEvent(
         buildRuntimeEvent(intent, "rejected", {
@@ -212,7 +249,7 @@ export class RuntimeCore {
 
     const policyResult = this.deps.policyGate.evaluate(intent, policyCtx);
     if (!policyResult.ok) {
-      this.deps.approvalRouter.remove(approvalId);
+      this.deps.approvalRouter.consume(approvalId, "rejected");
       this.deps.pendingOps.release(fp);
       await this.emitEvent(
         buildRuntimeEvent(intent, "blocked", {
@@ -232,7 +269,7 @@ export class RuntimeCore {
 
     const riskResult = this.deps.riskEngine.evaluate(intent, riskCtx);
     if (!riskResult.ok) {
-      this.deps.approvalRouter.remove(approvalId);
+      this.deps.approvalRouter.consume(approvalId, "rejected");
       this.deps.pendingOps.release(fp);
       await this.emitEvent(
         buildRuntimeEvent(intent, "blocked", {
@@ -250,7 +287,7 @@ export class RuntimeCore {
       };
     }
 
-    this.deps.approvalRouter.remove(approvalId);
+    this.deps.approvalRouter.consume(approvalId, "approved");
     try {
       await this.emitEvent(
         buildRuntimeEvent(intent, "approval_resumed", {
@@ -264,6 +301,7 @@ export class RuntimeCore {
           approvalId,
           summary: `Executed ${intent.action}`,
           txRefs: extractRuntimeTxRefs(adapterResult),
+          executionEvidence: extractRuntimeExecutionEvidence(adapterResult),
         }),
       );
       return { type: "executed", intentId: intent.id, adapterResult };

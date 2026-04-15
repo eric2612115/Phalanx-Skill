@@ -1,12 +1,12 @@
 # Uniswap V3 Direct Execution Note
 
-This note explains why Phalanx does not use the default `onchainos defi invest/withdraw` path for the live Uniswap V3 LP demo on Base, and what we wired instead for the evaluation flow.
+This note explains why **AgentPhalanx** does not use the default `onchainos defi invest/withdraw` path for the live Uniswap V3 LP demo on Base, and what we wired instead for the evaluation flow.
 
 ## Summary
 
 - `phalanx_uniswap_liquidity_plan` is still the planning and discovery entry point.
 - `onchainos wallet contract-call` is still the transaction signer / broadcaster through the OKX Agentic Wallet.
-- Phalanx now assembles the Uniswap V3 `NonfungiblePositionManager` calldata itself for the live LP execution lane on Base.
+- **AgentPhalanx** now assembles the Uniswap V3 `NonfungiblePositionManager` calldata itself for the live LP execution lane on Base.
 
 ## Why the default path was not enough
 
@@ -21,7 +21,7 @@ The observed mismatch was:
 
 Because of that mismatch, keeping the high-level LP route would have meant claiming a live path that we could not actually close on-chain.
 
-## What Phalanx now does
+## What AgentPhalanx now does
 
 For `target=uniswap-v3`:
 
@@ -34,7 +34,7 @@ For `target=uniswap-v3`:
    - `NonfungiblePositionManager.multicall([decreaseLiquidity, collect])` for withdraw
 5. Poll tx status after each broadcast before sending the next step
 
-This keeps the secure execution boundary inside OnchainOS while letting Phalanx control the exact Uniswap V3 calldata shape.
+This keeps the secure execution boundary inside OnchainOS while letting **AgentPhalanx** control the exact Uniswap V3 calldata shape.
 
 ## Current scope
 
@@ -69,12 +69,12 @@ Optional:
 
 ## What judges should understand
 
-The important product point is not that Phalanx bypasses OnchainOS. It does not.
+The important product point is not that **AgentPhalanx** bypasses OnchainOS. It does not.
 
 The actual design is:
 
 - planning and pool discovery: planner skill + OnchainOS detail/discovery
 - secure signing and broadcast: OnchainOS Agentic Wallet
-- exact Uniswap V3 execution encoding: Phalanx runtime
+- exact Uniswap V3 execution encoding: AgentPhalanx runtime
 
 This is a deliberate integration fix so the demo shows a real end-to-end LP roundtrip instead of a synthetic or partially working abstraction.

@@ -9,7 +9,7 @@ function formatCheckLine(c: InstallCheck): string {
 
 function formatMissingKey(key: string): string {
   if (key === "EXECUTION_WALLET_SIGNAL") {
-    return "AGENT_WALLET_ADDRESS / PHALANX_WALLET_ADDRESS / TEST_WALLET_ADDRESS";
+    return "Onchain OS managed wallet path (primary: OKX credentials enable runtime resolution; PHALANX_WALLET_ADDRESS / AGENT_WALLET_ADDRESS only for troubleshooting override; TEST_WALLET_ADDRESS only for rehearsal)";
   }
   return key;
 }
@@ -27,7 +27,12 @@ function pushCheckGroup(parts: string[], title: string, checks: readonly Install
 
 export function formatOperatorInitReport(result: OperatorInitResult): string {
   const parts: string[] = [];
-  parts.push("Phalanx operator init");
+  parts.push("AgentPhalanx — terminal bootstrap (Telegram operator)");
+  parts.push("");
+  parts.push("What this terminal is for (then hand off to Telegram):");
+  parts.push("  - Get TELEGRAM_BOT_TOKEN from @BotFather and save it in config.env");
+  parts.push("  - Run npm run init to validate local config and print readiness");
+  parts.push("  - Start the runtime from this shell (npm run dev), then continue in Telegram for /claim and approvals");
   parts.push("");
   if (result.configStatus === "missing") {
     parts.push("Config: missing");

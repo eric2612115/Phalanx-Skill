@@ -127,16 +127,33 @@ describe("runGuardianCycle", () => {
 });
 
 describe("guardian service", () => {
-  it("prefers explicit guardian wallet env over the generic test wallet address", () => {
-    expect(
+  it("prefers canonical explicit override over test wallet for guardian portfolio inputs", async () => {
+    await expect(
       resolveGuardianPortfolioInputs({
         TEST_WALLET_ADDRESS: "0xtest",
-        PHALANX_WALLET_ADDRESS: "0xguardian",
+        AGENT_WALLET_ADDRESS: "0xguardian",
         PHALANX_GUARDIAN_PORTFOLIO_CHAIN: "ethereum",
       } as NodeJS.ProcessEnv),
-    ).toEqual({
+    ).resolves.toEqual({
       address: "0xguardian",
       chain: "ethereum",
+    });
+  });
+
+  it("uses canonical managed-wallet resolution for guardian portfolio inputs", async () => {
+    await expect(
+      resolveGuardianPortfolioInputs(
+        {
+          PHALANX_RUNTIME_MODE: "live",
+          PHALANX_GUARDIAN_PORTFOLIO_CHAIN: "base",
+        } as NodeJS.ProcessEnv,
+        {
+          readManagedWalletAddress: async () => "0x1111111111111111111111111111111111111111",
+        },
+      ),
+    ).resolves.toEqual({
+      address: "0x1111111111111111111111111111111111111111",
+      chain: "base",
     });
   });
 

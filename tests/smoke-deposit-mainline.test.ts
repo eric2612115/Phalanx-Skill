@@ -13,6 +13,8 @@ import {
 
 const scriptPath = resolve(import.meta.dirname, "../scripts/smoke-deposit-mainline.ts");
 const scriptSource = readFileSync(scriptPath, "utf8");
+const allocationSmokePath = resolve(import.meta.dirname, "../scripts/smoke-allocation-mainline.ts");
+const allocationSmokeSource = readFileSync(allocationSmokePath, "utf8");
 
 describe("smoke-deposit-mainline script contract", () => {
   it("reuses the same host entry and Telegram approval smoke config as the existing live approval rehearsal", () => {
@@ -152,5 +154,16 @@ describe("smoke-deposit-mainline script contract", () => {
     expect(proof.humanSummary).toBe(
       "approval_requested=0|approval_resumed=0|deposit_attempted=0|deposit_completed=0|tx_refs_captured=0",
     );
+  });
+});
+
+describe("smoke-allocation-mainline script contract", () => {
+  it("reuses host + Telegram approval wiring and runs proactive allocation via host entry", () => {
+    expect(allocationSmokeSource).toContain('from "../src/app/host.js"');
+    expect(allocationSmokeSource).toContain("runAgenticAllocationMainlineDemo");
+    expect(allocationSmokeSource).toContain("buildTelegramApprovalSmokeConfigValues");
+    expect(allocationSmokeSource).toContain("assertDepositMainlineEnv");
+    expect(allocationSmokeSource).toContain("ALLOCATION_MAINLINE_SCHEMA_VERSION");
+    expect(allocationSmokeSource).toContain("buildAllocationMainlineProof");
   });
 });

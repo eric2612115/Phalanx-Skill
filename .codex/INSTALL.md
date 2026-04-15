@@ -1,5 +1,7 @@
 # Codex CLI Install
 
+**AgentPhalanx** is the product name for this action-plane runtime (repository folder: `Phalanx-Skill`).
+
 Status: supported now through **manual setup**.
 
 ## Read first

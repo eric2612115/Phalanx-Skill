@@ -1,8 +1,6 @@
-import { resolve } from "node:path";
-
 import {
   buildRuntimeConfig,
-  getExecutionWalletAddress,
+  hasExecutionWalletSignal,
   type RuntimeConfig,
   type RuntimeMode,
 } from "../config/store.js";
@@ -34,15 +32,35 @@ import {
 } from "../guardian/operator-assessment.js";
 import { EventStore } from "../storage/event-store.js";
 import {
-  buildRebalanceDemoRunMetadata,
   runRebalanceDemoFlow,
   type RebalanceDemoFlowInput,
   type RebalanceDemoFlowResult,
   type RebalanceDemoRunMetadata,
 } from "../demo/rebalance-flow.js";
-import { buildLpExecutionObserver } from "../demo/observer.js";
+import {
+  executeGuardianAllocationMainline,
+  type GuardianAllocationMainlineResult,
+} from "../demo/allocation-mainline.js";
 import { executeOmRateQuery } from "../adapters/omrate.js";
+import { normalizeWalletEvidence, type WalletEvidence } from "../runtime/execution-evidence.js";
 import type { ExecuteLpPositionIntentHooks } from "../adapters/lp-execution.js";
+import {
+  normalizeWhitelistTargets,
+  parseWhitelistTargets,
+  pickEventStorePath,
+  pickExecutor,
+  resolveAgenticRebalanceDemoConfig,
+} from "./host-bootstrap.js";
+import {
+  buildSyntheticGuardianRebalanceItem,
+  finalizeGuardianDemoRunForOutcome,
+  type GuardianDemoApprovalContext,
+} from "./host-guardian-demo.js";
+import {
+  buildReportFailedRuntimeEvent,
+  createHostEventPublisher,
+  summarizeHostReportError,
+} from "./host-reporting.js";
 
 export interface ApprovalOutboxItem {
   readonly approvalId: string;
@@ -122,15 +140,19 @@ export interface PhalanxHost {
   getRiskEvaluationContext(): RiskEvaluationContext;
   getRiskRuleOrder(): readonly string[];
   getGuardianLastAssessment(): GuardianLastAssessment | undefined;
-  getOperatorWalletSummary(): { readonly executionOrTestAddress?: string };
+  recordTelegramReportFailure(sourceEvent: RuntimeEvent, errorSummary: string): Promise<void>;
+  getOperatorWalletSummary(): {
+    readonly executionOrTestAddress?: string;
+    readonly walletEvidence: WalletEvidence;
+  };
   getLatestRebalanceDemoRunSummary(): RebalanceDemoRunMetadata | undefined;
+  /**
+   * Runs {@link executeGuardianAllocationMainline} with the same MCP bridge and funding gates as the
+   * guardian agentic rebalance demo path. Requires `PHALANX_AGENTIC_REBALANCE_DEMO_ENABLED=1` or
+   * `agenticRebalanceDemo.enabled` in {@link createPhalanxHost}.
+   */
+  runAgenticAllocationMainlineDemo(guardianReason?: string): Promise<GuardianAllocationMainlineResult>;
 }
-
-type GuardianDemoApprovalContext = {
-  readonly resumedAction: string;
-  readonly target?: string;
-  readonly demoRun?: RebalanceDemoRunMetadata;
-};
 
 function isExecutedMcpResult(
   result: McpToolResult,
@@ -157,94 +179,6 @@ function isPendingApprovalMcpResult(
   );
 }
 
-function createDryRunExecutor(
-  env: NodeJS.ProcessEnv,
-  uniswapPlannerHooks?: UniswapPlannerExecutionHooks,
-): ExecutionAdapter {
-  return {
-    async execute(intent: Parameters<ExecutionAdapter["execute"]>[0]): Promise<unknown> {
-      if (intent.action === "planUniswapLiquidity") {
-        const { runUniswapLiquidityPlannerForPayload } = await import("../adapters/uniswap.js");
-        return runUniswapLiquidityPlannerForPayload(intent.payload, env, uniswapPlannerHooks);
-      }
-      return {
-        mode: "dry_run",
-        action: intent.action,
-        target: intent.target ?? null,
-        payload: intent.payload,
-      };
-    },
-  };
-}
-
-function parseWhitelistTargets(values: Readonly<Record<string, string | undefined>>): string[] {
-  const raw = values.WHITELIST_TARGETS ?? values.PHALANX_WHITELIST_TARGETS ?? "";
-  const parsed = raw
-    .split(",")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  return normalizeWhitelistTargets(parsed.length > 0 ? parsed : ["pool"]);
-}
-
-function normalizeWhitelistTargets(targets: readonly string[]): string[] {
-  const next = new Set(targets.map((target) => target.trim()).filter((target) => target.length > 0));
-  next.add("whitelist-admin");
-  return [...next];
-}
-
-function pickExecutor(
-  options: CreatePhalanxHostOptions,
-  configValues: Readonly<Record<string, string | undefined>>,
-): ExecutionAdapter {
-  if (options.executor) {
-    return options.executor;
-  }
-  const env = configValues as NodeJS.ProcessEnv;
-  if ((configValues.PHALANX_EXECUTION_BACKEND ?? "").trim() === "onchainos_skill") {
-    return createSkillBackedExecutor({
-      env,
-      uniswapPlannerHooks: options.uniswapPlannerHooks,
-      lpExecutionHooks: options.lpExecutionHooks,
-    });
-  }
-  return createDryRunExecutor(env, options.uniswapPlannerHooks);
-}
-
-function pickEventStorePath(
-  options: CreatePhalanxHostOptions,
-  configValues: Readonly<Record<string, string | undefined>>,
-): string | undefined {
-  const explicit = options.eventStorePath?.trim();
-  if (explicit) {
-    return explicit;
-  }
-  const raw = configValues.PHALANX_EVENT_STORE_PATH?.trim();
-  return raw && raw.length > 0 ? resolve(raw) : undefined;
-}
-
-function resolveAgenticRebalanceDemoConfig(
-  options: CreatePhalanxHostOptions,
-  configValues: Readonly<Record<string, string | undefined>>,
-): CreatePhalanxHostOptions["agenticRebalanceDemo"] | undefined {
-  if (options.agenticRebalanceDemo?.enabled) {
-    return {
-      positionType: "v3",
-      ...options.agenticRebalanceDemo,
-    };
-  }
-  if ((configValues.PHALANX_AGENTIC_REBALANCE_DEMO_ENABLED ?? "").trim() !== "1") {
-    return undefined;
-  }
-  return {
-    enabled: true,
-    omRatePath: (configValues.PHALANX_REBALANCE_OMRATE_PATH ?? "/rebalance/opportunities").trim(),
-    chain: (configValues.PHALANX_DEFAULT_CHAIN ?? "base").trim(),
-    tokenA: (configValues.PHALANX_REBALANCE_TOKEN_A ?? "USDC").trim(),
-    tokenB: (configValues.PHALANX_REBALANCE_TOKEN_B ?? "ETH").trim(),
-    positionType: "v3",
-  };
-}
-
 export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): PhalanxHost {
   const approvalRouter = new ApprovalRouter();
   const pendingOps = new PendingOperationsTracker();
@@ -263,9 +197,9 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
     env: configValues as NodeJS.ProcessEnv,
     governanceWriteImpl: options.governanceWriteImpl,
   });
-  const eventStorePath = pickEventStorePath(options, configValues);
+  const eventStorePath = pickEventStorePath(options.eventStorePath, configValues);
   const eventStore = eventStorePath ? new EventStore<RuntimeEvent>(eventStorePath, 500) : undefined;
-  const demoConfig = resolveAgenticRebalanceDemoConfig(options, configValues);
+  const demoConfig = resolveAgenticRebalanceDemoConfig(options.agenticRebalanceDemo, configValues);
   const guardianDemoApprovalContexts = new Map<string, GuardianDemoApprovalContext>();
   let lastGuardianAssessment: GuardianLastAssessment | undefined;
   let lastRebalanceDemoRunSummary: RebalanceDemoRunMetadata | undefined;
@@ -303,22 +237,55 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
   let notifier: TelegramApprovalNotifier = options.telegramApproval ?? fallbackNotifier;
   let reportNotifier: TelegramReportNotifier | undefined = options.telegramReport;
 
-  async function publishRuntimeEvent(event: RuntimeEvent): Promise<void> {
-    runtimeEvents.push(event);
-    if (runtimeEvents.length > 500) {
-      runtimeEvents.splice(0, runtimeEvents.length - 500);
+  const { publishRuntimeEvent } = createHostEventPublisher({
+    runtimeEvents,
+    eventStore,
+    getReportNotifier: () => reportNotifier,
+    onTelegramReportFailure: async (sourceEvent, errorSummary) => {
+      await recordTelegramReportFailure(sourceEvent, errorSummary);
+    },
+  });
+
+  async function recordTelegramReportFailure(sourceEvent: RuntimeEvent, errorSummary: string): Promise<void> {
+    await publishRuntimeEvent(
+      buildReportFailedRuntimeEvent(sourceEvent, errorSummary),
+      { skipTelegramReport: true },
+    );
+  }
+
+  /**
+   * Guardian demo callback reporting is intentionally report-only.
+   * RuntimeCore events remain the source of truth; this must not append synthetic runtime events.
+   */
+  async function sendGuardianDemoReport(event: RuntimeEvent): Promise<void> {
+    if (!reportNotifier) {
+      return;
     }
-    eventStore?.append(event);
-    if (
-      reportNotifier &&
-      event.entrySource === "guardian" &&
-      (event.stage === "guardian_detected" ||
-        event.stage === "executed" ||
-        event.stage === "blocked" ||
-        event.stage === "rejected")
-    ) {
+    try {
       await reportNotifier.sendExecutionReport(event);
+    } catch (error) {
+      const summary = summarizeHostReportError(error);
+      console.error("Guardian demo Telegram report delivery failed:", summary);
+      await recordTelegramReportFailure(event, summary);
     }
+  }
+
+  function readOperatorWalletSummary(): {
+    readonly executionOrTestAddress?: string;
+    readonly walletEvidence: WalletEvidence;
+  } {
+    const envOverride =
+      (configValues.PHALANX_WALLET_ADDRESS ?? "").trim() || (configValues.AGENT_WALLET_ADDRESS ?? "").trim() || undefined;
+    const walletEvidence = normalizeWalletEvidence({
+      liveMode: runtimeConfig.mode === "live",
+      chain: (configValues.PHALANX_DEFAULT_CHAIN ?? "").trim() || "base",
+      explicitOverride: envOverride,
+      testFallback: runtimeConfig.wallet.testAddress,
+    });
+    return {
+      executionOrTestAddress: walletEvidence.resolvedAddress || undefined,
+      walletEvidence,
+    };
   }
 
   async function relayCoreRuntimeEvent(event: RuntimeEvent): Promise<void> {
@@ -403,19 +370,29 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
       return { handled: false };
     }
     const guardianDemo = guardianDemoApprovalContexts.get(parsed.approvalId);
+    const guardianDemoResumeRun = guardianDemo?.demoRun;
+    const approved = parsed.action === "approve";
     let runtimeOutcome: RuntimeOutcome;
     try {
-      if (guardianDemo?.demoRun) {
-        guardianDemoResumeEnrich = { approvalId: parsed.approvalId, demoRun: guardianDemo.demoRun };
+      if (guardianDemoResumeRun) {
+        guardianDemoResumeEnrich = { approvalId: parsed.approvalId, demoRun: guardianDemoResumeRun };
       }
-      runtimeOutcome = await core.submitApprovalDecision(parsed.approvalId, parsed.action === "approve");
+      runtimeOutcome = await core.submitApprovalDecision(parsed.approvalId, approved);
     } finally {
       guardianDemoResumeEnrich = undefined;
     }
     if (guardianDemo) {
       guardianDemoApprovalContexts.delete(parsed.approvalId);
+      const finalizedGuardianDemoRun = finalizeGuardianDemoRunForOutcome(
+        guardianDemoResumeRun,
+        runtimeOutcome,
+        approved,
+      );
+      if (finalizedGuardianDemoRun) {
+        lastRebalanceDemoRunSummary = finalizedGuardianDemoRun;
+      }
       if (runtimeOutcome.type === "executed") {
-        await publishRuntimeEvent({
+        await sendGuardianDemoReport({
           eventId: `guardian-demo:${parsed.approvalId}:executed`,
           createdAt: new Date().toISOString(),
           correlationId: `guardian-demo:${parsed.approvalId}`,
@@ -426,10 +403,10 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
           stage: "executed",
           summary: `Executed ${guardianDemo.resumedAction}`,
           txRefs: extractRuntimeTxRefs(runtimeOutcome.adapterResult),
-          demoRun: guardianDemo.demoRun,
+          demoRun: finalizedGuardianDemoRun,
         });
       } else if (runtimeOutcome.type === "blocked") {
-        await publishRuntimeEvent({
+        await sendGuardianDemoReport({
           eventId: `guardian-demo:${parsed.approvalId}:blocked`,
           createdAt: new Date().toISOString(),
           correlationId: `guardian-demo:${parsed.approvalId}`,
@@ -440,10 +417,10 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
           stage: "blocked",
           summary: runtimeOutcome.message,
           reason: runtimeOutcome.code,
-          demoRun: guardianDemo.demoRun,
+          demoRun: finalizedGuardianDemoRun,
         });
       } else if (runtimeOutcome.type === "rejected") {
-        await publishRuntimeEvent({
+        await sendGuardianDemoReport({
           eventId: `guardian-demo:${parsed.approvalId}:rejected`,
           createdAt: new Date().toISOString(),
           correlationId: `guardian-demo:${parsed.approvalId}`,
@@ -454,7 +431,7 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
           stage: "rejected",
           summary: runtimeOutcome.message,
           reason: runtimeOutcome.code,
-          demoRun: guardianDemo.demoRun,
+          demoRun: finalizedGuardianDemoRun,
         });
       }
     }
@@ -468,206 +445,92 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
     };
   }
 
-  async function handleGuardianDemoRebalance(item: GuardianCycleResult["items"][number]): Promise<RuntimeOutcome> {
-    const flow = await runRebalanceDemo({
-      omRatePath: demoConfig!.omRatePath,
-      chain: demoConfig!.chain,
-      tokenA: demoConfig!.tokenA,
-      tokenB: demoConfig!.tokenB,
-      positionType: demoConfig!.positionType ?? "v3",
-      prepareSwap: true,
-    });
-    const observer = buildLpExecutionObserver(flow.planner);
-    const demoInput = {
-      omRatePath: demoConfig!.omRatePath,
-      chain: demoConfig!.chain,
-      tokenA: demoConfig!.tokenA,
-      tokenB: demoConfig!.tokenB,
-    };
-    const demoRunMeta = buildRebalanceDemoRunMetadata(
-      demoInput,
-      flow,
-      observer
-        ? {
-            readyForExecution: observer.readyForExecution,
-            missingExecutionFields: observer.missingExecutionFields,
-            summary: observer.summary,
-            action: observer.action,
-            target: observer.target,
-          }
-        : undefined,
-    );
-    lastRebalanceDemoRunSummary = demoRunMeta;
-    guardianDemoCoreAugmentMetadata = demoRunMeta;
-    try {
-      const proposalIntent = {
-        id: `guardian-demo-proposal-${Date.now()}`,
-        lane: "execution" as const,
-        action: "proposeRebalance",
-        payload: {
-          reason: item.explanation.detected,
-          riskNotes: [flow.swapPreparation.summary],
+  async function runGuardianAllocationMainlineForDemoItem(
+    item: GuardianCycleResult["items"][number],
+  ): Promise<GuardianAllocationMainlineResult> {
+    const result = await executeGuardianAllocationMainline(
+      {
+        demoInput: {
+          omRatePath: demoConfig!.omRatePath,
+          chain: demoConfig!.chain,
+          tokenA: demoConfig!.tokenA,
+          tokenB: demoConfig!.tokenB,
+          positionType: demoConfig!.positionType ?? "v3",
+          prepareSwap: true,
         },
-        entrySource: "guardian" as const,
-        target: observer?.target ?? "uniswap-v3",
-      };
-      await publishRuntimeEvent(
-        buildRuntimeEvent(proposalIntent, "guardian_detected", {
-          summary: [
-            `Rebalance candidate ready`,
-            flow.selectedPool?.pairLabel ? `Pool ${flow.selectedPool.pairLabel}` : undefined,
-            flow.swapPreparation.summary,
-          ]
-            .filter(Boolean)
-            .join(" | "),
-          reason: item.explanation.detected,
-          demoRun: demoRunMeta,
-        }),
-      );
-      if (!observer || !observer.readyForExecution) {
-        const blockedSummary = [
-          observer?.summary ?? "Planner downstream is not execution-ready yet.",
-          flow.selectedPool?.pairLabel
-            ? `Pool ${flow.selectedPool.pairLabel} (${flow.selectedPool.pairAddress ?? "?"})`
-            : undefined,
-          `Swap prep: ${flow.swapPreparation.status}`,
-        ]
-          .filter(Boolean)
-          .join(" | ");
-        await publishRuntimeEvent(
-          buildRuntimeEvent(proposalIntent, "blocked", {
-            summary: blockedSummary,
-            reason: "DEMO_OBSERVER_NOT_READY",
-            demoRun: demoRunMeta,
-          }),
-        );
-        return {
-          type: "blocked",
-          intentId: proposalIntent.id,
-          stage: "approval_class",
-          code: "DEMO_OBSERVER_NOT_READY",
-          message: observer?.summary ?? "Planner downstream is not execution-ready yet.",
-        };
-      }
+        guardianReason: item.explanation.detected,
+      },
+      {
+        runRebalanceDemo: (demoInput) => runRebalanceDemo(demoInput),
+        publishRuntimeEvent,
+        invokePhalanxAction: async ({ action, payload, target }) => {
+          const out = await invokeMcp("phalanx_action", { action, payload, target });
+          if (!out.ok) {
+            return { ok: false, code: out.code, message: out.message };
+          }
+          const data = out.data as { kind?: string; adapterResult?: unknown; approvalId?: string };
+          if (data.kind === "executed") {
+            return { ok: true, kind: "executed", adapterResult: data.adapterResult };
+          }
+          if (data.kind === "pending_approval" && typeof data.approvalId === "string") {
+            return {
+              ok: true,
+              kind: "pending_approval",
+              approvalId: data.approvalId,
+              intentId: approvalRouter.get(data.approvalId)?.intent.id,
+            };
+          }
+          return { ok: false, code: "UNEXPECTED_OUTCOME", message: "Unexpected MCP action outcome" };
+        },
+        assessFundingReadiness: ({ flow }) => {
+          const walletSummary = readOperatorWalletSummary();
+          const walletSignalReady =
+            Boolean(walletSummary.executionOrTestAddress) || hasExecutionWalletSignal(configValues);
+          const amountReady =
+            (typeof flow.lpDepositPayloadSeed.amount === "string" && flow.lpDepositPayloadSeed.amount.trim().length > 0) ||
+            (typeof flow.lpDepositPayloadSeed.amountSecondary === "string" &&
+              flow.lpDepositPayloadSeed.amountSecondary.trim().length > 0);
+          const swapFundingReady =
+            flow.swapPreparation.status !== "wallet_unfunded_for_pair" &&
+            flow.swapPreparation.status !== "insufficient_context";
 
-      if (flow.swapPreparation.recommendedSwapIntent) {
-        const swapOut = await invokeMcp("phalanx_action", {
-          action: "swap",
-          payload: flow.swapPreparation.recommendedSwapIntent.payload,
-          target: "pool",
-        });
-        if (isExecutedMcpResult(swapOut)) {
-          await publishRuntimeEvent({
-            eventId: `guardian-demo:${Date.now()}:swap`,
-            createdAt: new Date().toISOString(),
-            correlationId: proposalIntent.id,
-            intentId: proposalIntent.id,
-            action: "swap",
-            entrySource: "guardian",
-            target: "pool",
-            stage: "executed",
-            summary: "Executed swap",
-            txRefs: extractRuntimeTxRefs(swapOut.data.adapterResult),
-            demoRun: demoRunMeta,
-          });
-        } else {
-          const message = swapOut.ok ? "Unexpected swap outcome" : swapOut.message;
-          await publishRuntimeEvent({
-            eventId: `guardian-demo:${Date.now()}:swap-blocked`,
-            createdAt: new Date().toISOString(),
-            correlationId: proposalIntent.id,
-            intentId: proposalIntent.id,
-            action: "swap",
-            entrySource: "guardian",
-            target: "pool",
-            stage: "blocked",
-            summary: message,
-            reason: swapOut.ok ? "UNEXPECTED_SWAP_OUTCOME" : swapOut.code,
-            demoRun: demoRunMeta,
-          });
+          if (walletSignalReady && amountReady && swapFundingReady) {
+            return {
+              ok: true,
+              summary:
+                "Funding readiness is backed by wallet signal plus planner/swap funding facts available in this chunk.",
+            };
+          }
           return {
-            type: "blocked",
-            intentId: proposalIntent.id,
-            stage: "policy",
-            code: swapOut.ok ? "UNEXPECTED_SWAP_OUTCOME" : swapOut.code,
-            message,
+            ok: false,
+            summary:
+              "Funding readiness failed: wallet signal, planner amount facts, or swap funding facts were insufficient.",
           };
-        }
-      }
-
-      const depositOut = await invokeMcp("phalanx_action", {
-        action: observer.action,
-        payload: observer.payload,
-        target: observer.target,
+        },
+        scopeAugmentDemoRun: async (meta, fn) => {
+          guardianDemoCoreAugmentMetadata = meta;
+          try {
+            return await fn();
+          } finally {
+            guardianDemoCoreAugmentMetadata = undefined;
+          }
+        },
+      },
+    );
+    lastRebalanceDemoRunSummary = result.demoRun;
+    if (result.guardianApprovalContext) {
+      guardianDemoApprovalContexts.set(result.guardianApprovalContext.approvalId, {
+        resumedAction: result.guardianApprovalContext.resumedAction,
+        target: result.guardianApprovalContext.target,
+        demoRun: result.guardianApprovalContext.demoRun,
       });
-      if (isExecutedMcpResult(depositOut)) {
-        await publishRuntimeEvent({
-          eventId: `guardian-demo:${Date.now()}:deposit`,
-          createdAt: new Date().toISOString(),
-          correlationId: proposalIntent.id,
-          intentId: proposalIntent.id,
-          action: observer.action,
-          entrySource: "guardian",
-          target: observer.target,
-          stage: "executed",
-          summary: `Executed ${observer.action}`,
-          txRefs: extractRuntimeTxRefs(depositOut.data.adapterResult),
-          demoRun: demoRunMeta,
-        });
-        return {
-          type: "executed",
-          intentId: proposalIntent.id,
-          adapterResult: depositOut.data.adapterResult,
-        };
-      }
-      if (isPendingApprovalMcpResult(depositOut)) {
-        const demoPending = buildRebalanceDemoRunMetadata(
-          demoInput,
-          flow,
-          {
-            readyForExecution: observer.readyForExecution,
-            missingExecutionFields: observer.missingExecutionFields,
-            summary: observer.summary,
-            action: observer.action,
-            target: observer.target,
-          },
-          { pendingApprovalId: depositOut.data.approvalId },
-        );
-        lastRebalanceDemoRunSummary = demoPending;
-        guardianDemoApprovalContexts.set(depositOut.data.approvalId, {
-          resumedAction: observer.action,
-          target: observer.target,
-          demoRun: demoPending,
-        });
-        return {
-          type: "pending_approval",
-          intentId: proposalIntent.id,
-          approvalId: depositOut.data.approvalId,
-        };
-      }
-      await publishRuntimeEvent({
-        eventId: `guardian-demo:${Date.now()}:deposit-blocked`,
-        createdAt: new Date().toISOString(),
-        correlationId: proposalIntent.id,
-        intentId: proposalIntent.id,
-        action: observer.action,
-        entrySource: "guardian",
-        target: observer.target,
-        stage: "blocked",
-        summary: depositOut.ok ? "Unexpected deposit outcome" : depositOut.message,
-        reason: depositOut.ok ? "UNEXPECTED_DEPOSIT_OUTCOME" : depositOut.code,
-        demoRun: demoRunMeta,
-      });
-      return {
-        type: "blocked",
-        intentId: proposalIntent.id,
-        stage: "policy",
-        code: depositOut.ok ? "UNEXPECTED_DEPOSIT_OUTCOME" : depositOut.code,
-        message: depositOut.ok ? "Unexpected deposit outcome" : depositOut.message,
-      };
-    } finally {
-      guardianDemoCoreAugmentMetadata = undefined;
     }
+    return result;
+  }
+
+  async function handleGuardianDemoRebalance(item: GuardianCycleResult["items"][number]): Promise<RuntimeOutcome> {
+    const r = await runGuardianAllocationMainlineForDemoItem(item);
+    return r.outcome;
   }
 
   async function handleGuardianCycle(result: GuardianCycleResult): Promise<readonly RuntimeOutcome[]> {
@@ -748,10 +611,19 @@ export function createPhalanxHost(options: CreatePhalanxHostOptions = {}): Phala
     getRiskEvaluationContext: () => options.riskContext ?? { now: Date.now() },
     getRiskRuleOrder: () => riskEngine.getRuleOrder(),
     getGuardianLastAssessment: () => lastGuardianAssessment,
-    getOperatorWalletSummary: () => ({
-      executionOrTestAddress: getExecutionWalletAddress(configValues) ?? runtimeConfig.wallet.testAddress,
-    }),
+    recordTelegramReportFailure,
+    getOperatorWalletSummary: readOperatorWalletSummary,
     getLatestRebalanceDemoRunSummary: () => lastRebalanceDemoRunSummary,
+    runAgenticAllocationMainlineDemo: async (guardianReason?: string) => {
+      if (!demoConfig?.enabled) {
+        throw new Error(
+          "runAgenticAllocationMainlineDemo requires PHALANX_AGENTIC_REBALANCE_DEMO_ENABLED=1 in config (or pass agenticRebalanceDemo.enabled to createPhalanxHost).",
+        );
+      }
+      return runGuardianAllocationMainlineForDemoItem(
+        buildSyntheticGuardianRebalanceItem(guardianReason ?? "allocation_mainline_smoke"),
+      );
+    },
   };
 }
 

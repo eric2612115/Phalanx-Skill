@@ -1,7 +1,8 @@
 {
   "name": "phalanx-skill",
-  "description": "Phalanx action-plane runtime for wallet execution, signing, x402 flows, and OmRate orchestration.",
+  "description": "AgentPhalanx action-plane runtime for wallet execution, signing, x402 flows, and OmRate orchestration (repository: Phalanx-Skill; npm id: phalanx-skill).",
   "version": "0.1.0",
+  "license": "UNLICENSED",
   "private": true,
   "type": "module",
   "engines": {
@@ -19,6 +20,7 @@
     "smoke:x402": "tsx scripts/x402-live-smoke.ts",
     "smoke:telegram-approval": "tsx scripts/telegram-approval-live-smoke.ts",
     "smoke:deposit-mainline": "tsx scripts/smoke-deposit-mainline.ts",
+    "smoke:allocation-mainline": "tsx scripts/smoke-allocation-mainline.ts",
     "review:docker:onchainos": "tsx scripts/review-onchainos-docker.ts",
     "review:docker:uniswap": "tsx scripts/review-uniswap-docker.ts",
     "review:docker:all": "npm run review:docker:onchainos && npm run review:docker:uniswap"

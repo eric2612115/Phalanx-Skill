@@ -106,6 +106,10 @@ describe("demo rebalance flow", () => {
       provider: "omrate",
       status: "completed",
       summary: "http_ok:200",
+      x402Requested: true,
+      x402BaselineReady: true,
+      paymentRequiredByServer: undefined,
+      paymentWrapped: true,
       bodyPreview: JSON.stringify({
         data: {
           candidates: [
@@ -151,6 +155,13 @@ describe("demo rebalance flow", () => {
     });
     expect(result.lpDepositPayloadSeed.investmentId).not.toBe("env-only-investment-id");
     expect(result.swapPreparation.status).toBe("not_evaluated");
+    expect(result.omRateExecutionEvidence.payment).toMatchObject({
+      paymentRequired: false,
+      paymentAttempted: true,
+      paymentWrapped: true,
+      paymentSettled: true,
+      baselineReady: true,
+    });
   });
 
   it("recommends a swap from runtime wallet holdings when the LP pair is not yet aligned", async () => {
@@ -175,6 +186,10 @@ describe("demo rebalance flow", () => {
           provider: "omrate",
           status: "completed",
           summary: "http_ok:200",
+          x402Requested: true,
+          x402BaselineReady: true,
+          paymentRequiredByServer: undefined,
+          paymentWrapped: true,
           bodyPreview: JSON.stringify({
             candidates: [{ chain: "base", tokenA: "USDC", tokenB: "ETH", score: 10 }],
           }),
@@ -208,6 +223,10 @@ describe("demo rebalance flow", () => {
       provider: "omrate",
       status: "completed",
       summary: "http_ok:200",
+      x402Requested: true,
+      x402BaselineReady: true,
+      paymentRequiredByServer: true,
+      paymentWrapped: false,
       bodyPreview: JSON.stringify({
         data: {
           candidates: [
@@ -279,5 +298,17 @@ describe("demo rebalance flow", () => {
     expect(meta.pendingApproval?.approvalId).toBe("approval-xyz");
     expect(meta.omRateSummary).toBe("http_ok:200");
     expect(meta.plannerSummary).toBe("planner_ok");
+    expect(meta.omRateExecutionEvidence.payment).toMatchObject({
+      paymentRequired: true,
+      paymentAttempted: false,
+      paymentWrapped: false,
+      paymentSettled: false,
+    });
+    expect(flow.omRateExecutionEvidence.payment).toMatchObject({
+      paymentRequired: true,
+      paymentAttempted: false,
+      paymentWrapped: false,
+      paymentSettled: false,
+    });
   });
 });

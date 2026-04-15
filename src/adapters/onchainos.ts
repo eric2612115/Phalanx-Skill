@@ -9,6 +9,17 @@ import {
   type BroadcastResult,
   type ExecutionPlanStep,
 } from "../execution/coordinator.js";
+import { buildOnchainosRuntimeEnv } from "./onchainos-env.js";
+import {
+  normalizeOnchainosWalletChain,
+  parseOnchainosWalletAddressesStdout,
+} from "./onchainos-wallet.js";
+
+export { buildOnchainosRuntimeEnv } from "./onchainos-env.js";
+export {
+  normalizeOnchainosWalletChain,
+  parseOnchainosWalletAddressesStdout,
+} from "./onchainos-wallet.js";
 
 export type OnchainosCapabilityKind = "lending" | "lp";
 
@@ -204,6 +215,7 @@ export type OnchainosExecutionCommandInput =
       readonly token: string;
       readonly amount: string;
       readonly chain: string;
+      readonly platformId?: string;
     }
   | {
       readonly kind: "lending_withdraw";
@@ -412,43 +424,31 @@ async function runCmd(
   });
 }
 
-export function buildOnchainosRuntimeEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): Pick<
-  NodeJS.ProcessEnv,
-  "OKX_API_KEY" | "OKX_API_SECRET" | "OKX_API_PASSPHRASE" | "OKX_SECRET_KEY" | "OKX_PASSPHRASE"
-> {
-  return {
-    OKX_API_KEY: env.OKX_API_KEY,
-    OKX_API_SECRET: env.OKX_API_SECRET,
-    OKX_API_PASSPHRASE: env.OKX_API_PASSPHRASE,
-    OKX_SECRET_KEY: env.OKX_SECRET_KEY ?? env.OKX_API_SECRET,
-    OKX_PASSPHRASE: env.OKX_PASSPHRASE ?? env.OKX_API_PASSPHRASE,
-  };
-}
-
 export function buildOnchainosExecutionCommand(
   input: OnchainosExecutionCommandInput,
 ): OnchainosExecutionCommand {
   switch (input.kind) {
-    case "lending_deposit":
-      return {
-        argv: [
-          "onchainos",
-          "defi",
-          "invest",
-          "--investment-id",
-          input.investmentId,
-          "--address",
-          input.address,
-          "--token",
-          input.token,
-          "--amount",
-          input.amount,
-          "--chain",
-          input.chain,
-        ],
-      };
+    case "lending_deposit": {
+      const argv = [
+        "onchainos",
+        "defi",
+        "invest",
+        "--investment-id",
+        input.investmentId,
+        "--address",
+        input.address,
+        "--token",
+        input.token,
+        "--amount",
+        input.amount,
+        "--chain",
+        input.chain,
+      ];
+      if (input.platformId) {
+        argv.push("--platform-id", input.platformId);
+      }
+      return { argv };
+    }
     case "lending_withdraw": {
       const argv = [
         "onchainos",
@@ -745,113 +745,6 @@ export function parseOnchainosTxDetailStatus(stdout: string): OnchainosTxProgres
       txStatus,
       failReason: typeof first.failReason === "string" ? first.failReason : undefined,
     };
-  } catch {
-    return null;
-  }
-}
-
-function normalizeOnchainosWalletChain(chain: string): string {
-  const chainAliases: Record<string, string> = {
-    ethereum: "1",
-    mainnet: "1",
-    base: "8453",
-    arbitrum: "42161",
-    polygon: "137",
-    bsc: "56",
-    xlayer: "196",
-  };
-  return chainAliases[chain.trim().toLowerCase()] ?? chain;
-}
-
-function isEvmAddress(value: string): boolean {
-  return /^0x[a-fA-F0-9]{40}$/.test(value.trim());
-}
-
-function normalizeParsedWalletChainKey(value: string | number | undefined): string | undefined {
-  if (typeof value === "number") {
-    return normalizeOnchainosWalletChain(String(value));
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? normalizeOnchainosWalletChain(trimmed) : undefined;
-  }
-  return undefined;
-}
-
-function recordChainAddress(
-  chainKey: string | undefined,
-  address: string | undefined,
-  byChain: Map<string, string>,
-): void {
-  if (!chainKey || !address || !isEvmAddress(address)) {
-    return;
-  }
-  const normalizedKey = normalizeParsedWalletChainKey(chainKey);
-  if (!normalizedKey) {
-    return;
-  }
-  if (!byChain.has(normalizedKey)) {
-    byChain.set(normalizedKey, address.trim());
-  }
-}
-
-function walkForChainIndexedAddresses(value: unknown, byChain: Map<string, string>): void {
-  if (!value || typeof value !== "object") {
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      walkForChainIndexedAddresses(item, byChain);
-    }
-    return;
-  }
-  const record = value as Record<string, unknown>;
-  const chainRaw = record.chainIndex ?? record.chainId ?? record.chain_id;
-  const addrRaw = record.address ?? record.evmAddress ?? record.walletAddress ?? record.accountAddress;
-  const chainKey = normalizeParsedWalletChainKey(
-    typeof chainRaw === "number" || typeof chainRaw === "string" ? chainRaw : undefined,
-  );
-  const address = typeof addrRaw === "string" ? addrRaw.trim() : undefined;
-  recordChainAddress(chainKey, address, byChain);
-  for (const child of Object.values(record)) {
-    walkForChainIndexedAddresses(child, byChain);
-  }
-}
-
-/**
- * Parses `onchainos wallet addresses` JSON stdout and returns the EVM address for the requested chain.
- * Accepts common `ok/data` CLI shapes and nested `chainIndex` + `address` pairs.
- */
-export function parseOnchainosWalletAddressesStdout(stdout: string, chain: string): string | null {
-  const targetChainId = normalizeOnchainosWalletChain(chain);
-  try {
-    const parsed = JSON.parse(stdout) as unknown;
-    const root = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-    const data = root.data;
-    const byChain = new Map<string, string>();
-    walkForChainIndexedAddresses(data, byChain);
-    const exactMatch = byChain.get(targetChainId);
-    if (exactMatch) {
-      return exactMatch;
-    }
-    const direct =
-      data && typeof data === "object" && !Array.isArray(data)
-        ? (data as Record<string, unknown>)
-        : null;
-    let directAddress: string | null = null;
-    if (direct) {
-      for (const key of ["evmAddress", "address", "walletAddress", "accountAddress"] as const) {
-        const raw = direct[key];
-        if (typeof raw === "string" && isEvmAddress(raw)) {
-          directAddress = raw.trim();
-          break;
-        }
-      }
-    }
-    if (byChain.size === 1) {
-      return [...byChain.values()][0] ?? null;
-    }
-    return directAddress;
   } catch {
     return null;
   }
@@ -1617,12 +1510,13 @@ export async function executeOnchainosX402Payment(
   }
 
   if (!result.ok) {
+    const summaryText = trimSummary(result.stderr || result.stdout || "onchainos x402 payment failed");
     return {
       provider: "onchainos",
       lane: "x402_payment",
       status: "failed",
       argv: command.argv,
-      summary: trimSummary(result.stderr || result.stdout || "onchainos x402 payment failed"),
+      summary: summaryText,
       stdout: result.stdout,
       stderr: result.stderr,
       exitCode: result.exitCode,

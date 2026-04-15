@@ -20,7 +20,7 @@ function guidanceForLifecycle(ctx: PolicyContext): string {
     case "UNCLAIMED":
       return "Setup is not started. Complete owner claim and the setup wizard in your private Telegram chat with the bot before execution or portfolio tools are available.";
     case "SETUP_IN_PROGRESS":
-      return "Setup is in progress. Continue the Telegram setup wizard (OKX keys, wallet, OmRate key, whitelist, finalize). Until lifecycle becomes READY, MCP exposes read-only status only plus this guidance.";
+      return "Setup is in progress. Continue the Telegram setup wizard (login email, OKX keys, optional OmRate key, managed wallet bootstrap, funding confirmation, allocate-or-skip). Until lifecycle becomes READY, MCP exposes read-only status only plus this guidance.";
     case "READY":
       if (ctx.executionPaused) {
         return "Runtime is READY but execution is paused. Read-only portfolio/status queries are allowed; state-changing actions remain policy-gated.";

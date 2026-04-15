@@ -44,11 +44,13 @@ beforeEach(() => {
   } else {
     process.env.TELEGRAM_ALLOWED_USER_ID = originalAllowedUserId;
   }
-  if (originalConfigPath === undefined) {
-    delete process.env.PHALANX_CONFIG_PATH;
-  } else {
-    process.env.PHALANX_CONFIG_PATH = originalConfigPath;
-  }
+  // Isolate from repo-root config.env (may pin TELEGRAM_ALLOWED_USER_ID) so defaults match tests.
+  const isolatedDir = mkdtempSync(join(tmpdir(), "phalanx-telegram-isolated-"));
+  const isolatedConfigPath = join(isolatedDir, "config.env");
+  const isolatedServicePath = join(isolatedDir, "service.env");
+  writeFileSync(isolatedConfigPath, "", "utf8");
+  writeFileSync(isolatedServicePath, "", "utf8");
+  process.env.PHALANX_CONFIG_PATH = isolatedConfigPath;
   resetTelegramSetupStateForTests();
 });
 
@@ -72,7 +74,11 @@ describe("telegram setup flow", () => {
   });
 
   it("advances all wizard steps and reaches READY after finalize confirm", async () => {
-    const session = createSetupSession();
+    const session = createSetupSession({
+      hooks: {
+        readManagedWalletAddress: async () => "0x1111111111111111111111111111111111111111",
+      },
+    });
     await handleTelegramUpdate(
       { from: { id: 7 }, chat: { type: "private" }, text: "claim" },
       session,
@@ -82,18 +88,19 @@ describe("telegram setup flow", () => {
       session,
     );
     const steps = [
+      "operator@example.com",
       "OKX_API_KEY=key\nOKX_API_SECRET=secret\nOKX_API_PASSPHRASE=pass",
-      "AGENT_WALLET_ADDRESS=0x1111111111111111111111111111111111111111",
-      "OMRATE_API_KEY=omrate-key",
-      "uniswap-v3,pancakeswap-v3",
-      "confirm",
+      "skip",
+      "continue",
+      "funded",
+      "allocate_now",
     ] as const;
     for (const s of steps) {
       const r = await handleTelegramUpdate(
         { from: { id: 7 }, chat: { type: "private" }, text: s },
         session,
       );
-      if (s === "confirm") {
+      if (s === "allocate_now") {
         expect(r.nextState).toBe("READY");
         expect(r.messages.join(" ")).toContain("READY");
       } else {
@@ -117,6 +124,7 @@ describe("telegram setup flow", () => {
           checks.push(step);
           return null;
         },
+        readManagedWalletAddress: async () => "0x1111111111111111111111111111111111111111",
       }),
     });
 
@@ -130,7 +138,7 @@ describe("telegram setup flow", () => {
       {
         from: { id: 5 },
         chat: { type: "private" },
-        text: "OKX_API_KEY=key\nOKX_API_SECRET=secret\nOKX_API_PASSPHRASE=pass",
+        text: "operator@example.com",
       },
       session,
     );
@@ -138,7 +146,7 @@ describe("telegram setup flow", () => {
       {
         from: { id: 5 },
         chat: { type: "private" },
-        text: "AGENT_WALLET_ADDRESS=0x1111111111111111111111111111111111111111",
+        text: "OKX_API_KEY=key\nOKX_API_SECRET=secret\nOKX_API_PASSPHRASE=pass",
       },
       session,
     );
@@ -147,24 +155,71 @@ describe("telegram setup flow", () => {
       session,
     );
     await handleTelegramUpdate(
-      { from: { id: 5 }, chat: { type: "private" }, text: "uniswap-v3,pancakeswap-v3" },
+      { from: { id: 5 }, chat: { type: "private" }, text: "continue" },
+      session,
+    );
+    await handleTelegramUpdate(
+      { from: { id: 5 }, chat: { type: "private" }, text: "funded" },
       session,
     );
 
     expect(checks).toEqual([
+      "collect_login_email",
       "collect_okx",
-      "collect_wallet",
       "collect_omrate",
-      "collect_whitelist",
+      "bootstrap_wallet",
+      "confirm_funding",
     ]);
 
     const raw = readFileSync(configPath, "utf8");
     const serviceRaw = readFileSync(servicePath, "utf8");
     expect(raw).toContain("TELEGRAM_ALLOWED_USER_ID=5");
+    expect(raw).toContain("OKX_AGENTIC_WALLET_LOGIN_EMAIL=operator@example.com");
     expect(raw).toContain("OKX_API_KEY=key");
     expect(raw).toContain("OMRATE_API_KEY=omrate-key");
-    expect(raw).not.toContain("WHITELIST_TARGETS=");
-    expect(serviceRaw).toContain("WHITELIST_TARGETS=uniswap-v3,pancakeswap-v3");
+    expect(raw).toContain("OKX_AGENTIC_WALLET_CURRENT_ADDRESS=0x1111111111111111111111111111111111111111");
+    expect(raw).toContain("OKX_AGENTIC_WALLET_ADDRESS_HISTORY=0x1111111111111111111111111111111111111111");
+    expect(raw).not.toContain("AGENT_WALLET_ADDRESS=");
+    expect(serviceRaw).not.toContain("WHITELIST_TARGETS=");
+  });
+
+  it("shows the confirmed managed wallet address and funding guidance after bootstrap", async () => {
+    const session = createSetupSession({
+      hooks: {
+        readManagedWalletAddress: async () => "0x1111111111111111111111111111111111111111",
+      },
+    });
+
+    await handleTelegramUpdate({ from: { id: 7 }, chat: { type: "private" }, text: "claim" }, session);
+    await handleTelegramUpdate(
+      { from: { id: 7 }, chat: { type: "private" }, text: "confirm" },
+      session,
+    );
+    await handleTelegramUpdate(
+      { from: { id: 7 }, chat: { type: "private" }, text: "operator@example.com" },
+      session,
+    );
+    await handleTelegramUpdate(
+      {
+        from: { id: 7 },
+        chat: { type: "private" },
+        text: "OKX_API_KEY=key\nOKX_API_SECRET=secret\nOKX_API_PASSPHRASE=pass",
+      },
+      session,
+    );
+    await handleTelegramUpdate(
+      { from: { id: 7 }, chat: { type: "private" }, text: "skip" },
+      session,
+    );
+
+    const result = await handleTelegramUpdate(
+      { from: { id: 7 }, chat: { type: "private" }, text: "continue" },
+      session,
+    );
+
+    expect(result.messages.join(" ")).toContain("0x1111111111111111111111111111111111111111");
+    expect(result.messages.join(" ").toLowerCase()).toMatch(/fund|deposit|managed wallet/i);
+    expect(session.wizardStep).toBe("confirm_funding");
   });
 });
 
@@ -182,7 +237,12 @@ describe("setup validation", () => {
       session,
     );
     expect(badOkx.messages.join(" ")).toMatch(/invalid/i);
-    expect(session.wizardStep).toBe("collect_okx");
+    expect(session.wizardStep).toBe("collect_login_email");
+
+    await handleTelegramUpdate(
+      { from: { id: 7 }, chat: { type: "private" }, text: "operator@example.com" },
+      session,
+    );
 
     await handleTelegramUpdate(
       {
@@ -193,24 +253,8 @@ describe("setup validation", () => {
       session,
     );
 
-    const badWallet = await handleTelegramUpdate(
-      { from: { id: 7 }, chat: { type: "private" }, text: "wallet=bad" },
-      session,
-    );
-    expect(badWallet.messages.join(" ")).toMatch(/invalid/i);
-    expect(session.wizardStep).toBe("collect_wallet");
-
-    await handleTelegramUpdate(
-      {
-        from: { id: 7 },
-        chat: { type: "private" },
-        text: "AGENT_WALLET_ADDRESS=0x1111111111111111111111111111111111111111",
-      },
-      session,
-    );
-
     const badOmrate = await handleTelegramUpdate(
-      { from: { id: 7 }, chat: { type: "private" }, text: "OMRATE_API_KEY=" },
+      { from: { id: 7 }, chat: { type: "private" }, text: "wallet=bad" },
       session,
     );
     expect(badOmrate.messages.join(" ")).toMatch(/invalid/i);
@@ -221,12 +265,12 @@ describe("setup validation", () => {
       session,
     );
 
-    const badWhitelist = await handleTelegramUpdate(
+    const badBootstrapContinue = await handleTelegramUpdate(
       { from: { id: 7 }, chat: { type: "private" }, text: " , " },
       session,
     );
-    expect(badWhitelist.messages.join(" ")).toMatch(/invalid/i);
-    expect(session.wizardStep).toBe("collect_whitelist");
+    expect(badBootstrapContinue.messages.join(" ")).toMatch(/invalid|continue/i);
+    expect(session.wizardStep).toBe("bootstrap_wallet");
   });
 
   it("stays on the same step when capability validation fails", async () => {
@@ -240,6 +284,10 @@ describe("setup validation", () => {
     await handleTelegramUpdate({ from: { id: 7 }, chat: { type: "private" }, text: "claim" }, session);
     await handleTelegramUpdate(
       { from: { id: 7 }, chat: { type: "private" }, text: "confirm" },
+      session,
+    );
+    await handleTelegramUpdate(
+      { from: { id: 7 }, chat: { type: "private" }, text: "operator@example.com" },
       session,
     );
 
@@ -260,13 +308,18 @@ describe("setup validation", () => {
     const session = createSetupSession({
       hooks: {
         validateCapability: async ({ step }) =>
-          step === "finalize" ? "Final readiness check failed" : null,
+          step === "offer_allocate" ? "Final readiness check failed" : null,
+        readManagedWalletAddress: async () => "0x1111111111111111111111111111111111111111",
       },
     });
 
     await handleTelegramUpdate({ from: { id: 7 }, chat: { type: "private" }, text: "claim" }, session);
     await handleTelegramUpdate(
       { from: { id: 7 }, chat: { type: "private" }, text: "confirm" },
+      session,
+    );
+    await handleTelegramUpdate(
+      { from: { id: 7 }, chat: { type: "private" }, text: "operator@example.com" },
       session,
     );
     await handleTelegramUpdate(
@@ -281,33 +334,39 @@ describe("setup validation", () => {
       {
         from: { id: 7 },
         chat: { type: "private" },
-        text: "AGENT_WALLET_ADDRESS=0x1111111111111111111111111111111111111111",
+        text: "skip",
       },
       session,
     );
     await handleTelegramUpdate(
-      { from: { id: 7 }, chat: { type: "private" }, text: "OMRATE_API_KEY=omrate-key" },
+      { from: { id: 7 }, chat: { type: "private" }, text: "continue" },
       session,
     );
     await handleTelegramUpdate(
-      { from: { id: 7 }, chat: { type: "private" }, text: "uniswap-v3,pancakeswap-v3" },
+      { from: { id: 7 }, chat: { type: "private" }, text: "funded" },
       session,
     );
 
     const result = await handleTelegramUpdate(
-      { from: { id: 7 }, chat: { type: "private" }, text: "confirm" },
+      { from: { id: 7 }, chat: { type: "private" }, text: "allocate_now" },
       session,
     );
 
     expect(result.nextState).toBe("SETUP_IN_PROGRESS");
     expect(result.messages.join(" ")).toContain("Final readiness check failed");
     expect(session.lifecycle).toBe("SETUP_IN_PROGRESS");
-    expect(session.wizardStep).toBe("finalize");
+    expect(session.wizardStep).toBe("offer_allocate");
   });
 });
 
 describe("default env behavior", () => {
-  it("defaults session restrictions from process.env.TELEGRAM_ALLOWED_USER_ID", async () => {
+  it("defaults session restrictions from merged runtime config (process.env wins over files)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "phalanx-telegram-merge-"));
+    const configPath = join(dir, "config.env");
+    const servicePath = join(dir, "service.env");
+    writeFileSync(configPath, "TELEGRAM_ALLOWED_USER_ID=from-config\n", "utf8");
+    writeFileSync(servicePath, "TELEGRAM_ALLOWED_USER_ID=from-service\n", "utf8");
+    process.env.PHALANX_CONFIG_PATH = configPath;
     process.env.TELEGRAM_ALLOWED_USER_ID = "99";
     resetTelegramSetupStateForTests();
 
@@ -328,6 +387,33 @@ describe("default env behavior", () => {
     expect(allowed.messages.join(" ")).toMatch(/confirm/i);
   });
 
+  it("defaults session restrictions from service.env when absent in config.env and process", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "phalanx-telegram-service-only-"));
+    const configPath = join(dir, "config.env");
+    const servicePath = join(dir, "service.env");
+    writeFileSync(configPath, "# no telegram id\n", "utf8");
+    writeFileSync(servicePath, "TELEGRAM_ALLOWED_USER_ID=88\n", "utf8");
+    delete process.env.TELEGRAM_ALLOWED_USER_ID;
+    process.env.PHALANX_CONFIG_PATH = configPath;
+    resetTelegramSetupStateForTests();
+
+    const { handleTelegramUpdate: handle } = await import("../src/telegram/setup.js");
+    const rejected = await handle({
+      from: { id: 1 },
+      chat: { type: "private" },
+      text: "claim",
+    });
+    expect(rejected.nextState).toBe("UNCLAIMED");
+
+    const allowed = await handle({
+      from: { id: 88 },
+      chat: { type: "private" },
+      text: "claim",
+    });
+    expect(allowed.nextState).toBe("UNCLAIMED");
+    expect(allowed.messages.join(" ")).toMatch(/confirm/i);
+  });
+
   it("uses default config-backed persistence for Telegram entry without explicit hooks", async () => {
     const dir = mkdtempSync(join(tmpdir(), "phalanx-telegram-default-"));
     const configPath = join(dir, "config.env");
@@ -341,25 +427,67 @@ describe("default env behavior", () => {
     await handle({
       from: { id: 55 },
       chat: { type: "private" },
+      text: "operator@example.com",
+    });
+    await handle({
+      from: { id: 55 },
+      chat: { type: "private" },
       text: "OKX_API_KEY=key\nOKX_API_SECRET=secret\nOKX_API_PASSPHRASE=pass",
     });
 
     const raw = readFileSync(configPath, "utf8");
     expect(raw).toContain("TELEGRAM_ALLOWED_USER_ID=55");
+    expect(raw).toContain("OKX_AGENTIC_WALLET_LOGIN_EMAIL=operator@example.com");
     expect(raw).toContain("OKX_API_KEY=key");
     expect(raw).toContain("OKX_API_SECRET=secret");
     expect(raw).toContain("OKX_API_PASSPHRASE=pass");
+  });
+
+  it("requires a warning and second confirmation before overwriting the OKX login email in READY", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "phalanx-telegram-ready-email-"));
+    const configPath = join(dir, "config.env");
+    writeFileSync(
+      configPath,
+      ["TELEGRAM_ALLOWED_USER_ID=55", "OKX_AGENTIC_WALLET_LOGIN_EMAIL=old@example.com"].join("\n") + "\n",
+      "utf8",
+    );
+    process.env.PHALANX_CONFIG_PATH = configPath;
+
+    const session = createSetupSession();
+    session.lifecycle = "READY";
+    session.ownerUserId = "55";
+
+    const warn = await handleTelegramUpdate(
+      { from: { id: 55 }, chat: { type: "private" }, text: "change login email" },
+      session,
+    );
+    expect(warn.messages.join(" ").toLowerCase()).toMatch(/warning|old wallet|confirm/i);
+
+    const askNew = await handleTelegramUpdate(
+      { from: { id: 55 }, chat: { type: "private" }, text: "confirm" },
+      session,
+    );
+    expect(askNew.messages.join(" ").toLowerCase()).toMatch(/new login email|send.*email/i);
+
+    const saved = await handleTelegramUpdate(
+      { from: { id: 55 }, chat: { type: "private" }, text: "new@example.com" },
+      session,
+    );
+    expect(saved.messages.join(" ").toLowerCase()).toMatch(/updated|saved/i);
+    expect(readFileSync(configPath, "utf8")).toContain("OKX_AGENTIC_WALLET_LOGIN_EMAIL=new@example.com");
+    expect(session.lifecycle).toBe("READY");
   });
 });
 
 describe("wizard step flow", () => {
   it("moves through okx, wallet, omrate, whitelist, finalize in order", async () => {
     const { getNextWizardStep: next } = await import("../src/telegram/setup.js");
-    expect(next("collect_okx")).toBe("collect_wallet");
-    expect(next("collect_wallet")).toBe("collect_omrate");
-    expect(next("collect_omrate")).toBe("collect_whitelist");
-    expect(next("collect_whitelist")).toBe("finalize");
-    expect(next("finalize")).toBeNull();
+    expect(next("collect_login_email")).toBe("collect_okx");
+    expect(next("collect_okx")).toBe("collect_omrate");
+    expect(next("collect_omrate")).toBe("bootstrap_wallet");
+    expect(next("bootstrap_wallet")).toBe("confirm_funding");
+    expect(next("confirm_funding")).toBe("offer_allocate");
+    expect(next("offer_allocate")).toBeNull();
   });
 });
 

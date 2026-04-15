@@ -1,4 +1,5 @@
 import type { RebalanceDemoRunMetadata } from "../demo/rebalance-flow.js";
+import type { ExecutionEvidence } from "./execution-evidence.js";
 import type { RuntimeIntent } from "./types.js";
 
 export type RuntimeEventStage =
@@ -8,7 +9,8 @@ export type RuntimeEventStage =
   | "approval_resumed"
   | "executed"
   | "blocked"
-  | "rejected";
+  | "rejected"
+  | "report_failed";
 
 export interface RuntimeEvent {
   readonly eventId: string;
@@ -26,6 +28,8 @@ export interface RuntimeEvent {
   readonly approvalId?: string;
   /** Structured OmRate + Uniswap demo context when the event belongs to the agentic rebalance demo path. */
   readonly demoRun?: RebalanceDemoRunMetadata;
+  /** Normalized wallet / payment / milestone evidence for this lifecycle point. */
+  readonly executionEvidence?: ExecutionEvidence;
 }
 
 function stringField(payload: Readonly<Record<string, unknown>>, key: string): string | undefined {
@@ -49,7 +53,10 @@ export function buildRuntimeEvent(
   intent: RuntimeIntent,
   stage: RuntimeEventStage,
   extra: Partial<
-    Omit<RuntimeEvent, "eventId" | "createdAt" | "correlationId" | "intentId" | "action" | "entrySource" | "target" | "stage">
+    Omit<
+      RuntimeEvent,
+      "eventId" | "createdAt" | "correlationId" | "intentId" | "action" | "entrySource" | "target" | "stage"
+    >
   > = {},
 ): RuntimeEvent {
   const payload = intent.payload;
@@ -70,6 +77,7 @@ export function buildRuntimeEvent(
     txRefs: extra.txRefs,
     approvalId: extra.approvalId,
     demoRun: extra.demoRun,
+    executionEvidence: extra.executionEvidence,
   };
 }
 
@@ -93,4 +101,13 @@ export function extractRuntimeTxRefs(adapterResult: unknown): readonly string[] 
     return txRefs.length > 0 ? txRefs : undefined;
   }
   return undefined;
+}
+
+export function extractRuntimeExecutionEvidence(adapterResult: unknown): ExecutionEvidence | undefined {
+  if (!adapterResult || typeof adapterResult !== "object") {
+    return undefined;
+  }
+  const record = adapterResult as Record<string, unknown>;
+  const candidate = record.executionEvidence;
+  return candidate && typeof candidate === "object" ? (candidate as ExecutionEvidence) : undefined;
 }

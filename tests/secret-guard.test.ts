@@ -16,6 +16,7 @@ describe("isSecretLikeFieldName", () => {
     expect(isSecretLikeFieldName("PRIVATE_KEY")).toBe(true);
     expect(isSecretLikeFieldName("OTP")).toBe(true);
     expect(isSecretLikeFieldName("AUTHORIZATION")).toBe(true);
+    expect(isSecretLikeFieldName("OKX_AGENTIC_WALLET_LOGIN_EMAIL")).toBe(true);
   });
 
   it("returns false for benign keys", () => {
@@ -29,6 +30,16 @@ describe("detectionsInString", () => {
   it("flags KEY=value env-style lines", () => {
     const d = detectionsInString("ok\nOMRATE_API_KEY=sk_live_abc123\nend");
     expect(d.some((x) => x.kind === "env_assignment")).toBe(true);
+  });
+
+  it("flags login-email style env assignments as sensitive outbound text", () => {
+    const d = detectionsInString("OKX_AGENTIC_WALLET_LOGIN_EMAIL=operator@example.com");
+    expect(d.some((x) => x.kind === "env_assignment")).toBe(true);
+  });
+
+  it("flags raw email addresses in free text for outbound redaction", () => {
+    const d = detectionsInString("contact operator@example.com before retrying");
+    expect(d.some((x) => x.kind === "email_address")).toBe(true);
   });
 
   it("does not flag obvious non-secret env keys by substring alone", () => {
@@ -53,6 +64,11 @@ describe("detectionsInString", () => {
 describe("detectionsInValue", () => {
   it("flags values under secret-like keys", () => {
     const d = detectionsInValue({ nested: { API_KEY: "x" } });
+    expect(d.some((x) => x.kind === "secret_field")).toBe(true);
+  });
+
+  it("treats login-email fields as sensitive structured output", () => {
+    const d = detectionsInValue({ OKX_AGENTIC_WALLET_LOGIN_EMAIL: "operator@example.com" });
     expect(d.some((x) => x.kind === "secret_field")).toBe(true);
   });
 

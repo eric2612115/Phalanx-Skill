@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn the already-proven live deposit path into a stable, replayable, judge-ready X Layer Arena submission, then add the highest-value optional upgrades if time remains.
+**Goal:** Turn the already-proven live deposit path into a stable, replayable, judge-ready X Layer Arena submission. In the current repo state, the full `deposit -> tokenId discovery -> withdraw` roundtrip is also live-proven; `deposit` remains the default recording cut, while allocation/x402 is the fuller product story.
 
-**Architecture:** Keep `RuntimeCore` and the current `Onchain OS -> approval -> resume -> live execution` mainline intact. Do not redesign custody, do not replace `onchainos`, and do not broaden into a hosted control plane. Instead, finish the missing operator-facing edges: managed wallet auto-resolution, one-command deposit rehearsal, current docs and runbooks, and proof-oriented demo flow. `withdraw` and richer LP reporting remain additive upgrades after the recording path is stable.
+**Architecture:** Keep `RuntimeCore` and the current `Onchain OS -> approval -> resume -> live execution` mainline intact. Do not redesign custody, do not replace `onchainos`, and do not broaden into a hosted control plane. Instead, finish the missing operator-facing edges: managed wallet auto-resolution, one-command deposit rehearsal, current docs and runbooks, and proof-oriented demo flow. Richer LP reporting and clearer allocation/x402 packaging remain additive upgrades after the recording path is stable.
 
 **Tech Stack:** TypeScript, Node.js, Vitest, existing Phalanx runtime/host/telegram modules, Onchain OS, Uniswap planner integration, OmRate/x402 integration
 
@@ -21,9 +21,13 @@
 
 **P1 scope if time remains:**
 
-- close `deposit -> tokenId discovery -> withdraw` live roundtrip
+- package the allocation/x402 story and grouped operator evidence more clearly
 - add a Telegram LP position detail query surface
 - expand CI to run `guard:ai + test + build`
+
+Current note:
+
+- the `deposit -> tokenId discovery -> withdraw` live roundtrip is now complete and should not be treated as an open gap when citing this plan
 
 **Out of scope for this round:**
 
@@ -367,7 +371,7 @@ Expected:
 
 ## Chunk 6: Optional Product-Completeness Upgrades
 
-### Task 6: If P0 is stable, close withdraw roundtrip
+### Task 6: Historical note - this was the old withdraw-roundtrip gap when the plan was first written
 
 **Files:**
 
@@ -507,7 +511,7 @@ The plan is successfully executed for today's submission only when:
 
 Stretch completion for extra polish:
 
-- withdraw roundtrip is live-closed
+- allocation/x402 story is packaged with the same clarity as the deposit-default recording path
 - Telegram LP position detail query is available
 - CI runs `guard:ai + test + build`
 

@@ -1,5 +1,7 @@
 # Claude Code Install
 
+**AgentPhalanx** is the product name for this action-plane runtime (repository folder: `Phalanx-Skill`).
+
 Status: supported now through **manual setup**.
 
 This directory is a thin host-facing guide only. It does **not** claim a verified marketplace or plugin-manifest format for Claude Code in this repo.
@@ -35,4 +37,4 @@ Run `npm test` and `npm run build` when required by `docs/agent-pack/PRE_MERGE_C
 
 ## MCP
 
-If you want Claude Code to talk to the Phalanx MCP server, start from `.mcp.json.example` and wire env values locally.
+If you want Claude Code to talk to the AgentPhalanx MCP server, start from `.mcp.json.example` and wire `PHALANX_*` env values locally.

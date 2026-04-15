@@ -378,3 +378,32 @@ describe("MCP unknown tool", () => {
     expect(out.code).toBe("UNKNOWN_TOOL");
   });
 });
+
+describe("MCP approval resume safety", () => {
+  it("rejects duplicate submitApprovalDecision after whitelist governance completed", async () => {
+    const notify = vi.fn<TelegramApprovalNotifier["sendApprovalRequest"]>(async () => ({ ok: true }));
+    const deps = makeMcpDeps({
+      telegramApproval: { sendApprovalRequest: notify },
+      whitelistTargets: ["whitelist-admin"],
+      approvalNotifyTimeoutMs: 200,
+    });
+
+    const first = await invokePhalanxMcpTool(
+      "phalanx_action",
+      { action: "requestWhitelistExpansion", payload: { target: "uniswap-v3" }, target: "whitelist-admin" },
+      deps,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok || first.data.kind !== "pending_approval") throw new Error("expected pending");
+    const approvalId = first.data.approvalId;
+
+    const once = await deps.core.submitApprovalDecision(approvalId, true);
+    expect(once.type).toBe("executed");
+
+    const dup = await deps.core.submitApprovalDecision(approvalId, true);
+    expect(dup.type).toBe("rejected");
+    if (dup.type === "rejected") {
+      expect(dup.code).toBe("APPROVAL_ALREADY_CONSUMED");
+    }
+  });
+});

@@ -234,6 +234,9 @@ describe("omrate adapter (contract)", () => {
     expect(r.status).toBe("completed");
     expect(mockFetch).toHaveBeenCalled();
     expect(r.paymentWrapped).toBe(false);
+    expect(r.x402Requested).toBe(false);
+    expect(r.paymentRequiredByServer).toBeUndefined();
+    expect("executionEvidence" in r).toBe(false);
   });
 
   it("summarizeOmRateAdapterEnv reflects base and key presence", () => {
@@ -963,6 +966,7 @@ describe("onchainos adapter (contract)", () => {
     expect(result.provider).toBe("onchainos");
     expect(result.lane).toBe("x402_payment");
     expect(result.status).toBe("tool_missing");
+    expect("executionEvidence" in result).toBe(false);
   });
 
   it("executeOnchainosWalletSend degrades cleanly when binary is missing", async () => {

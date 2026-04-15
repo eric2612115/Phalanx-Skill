@@ -10,10 +10,12 @@ import { fingerprintForPending } from "../src/runtime/intents.js";
 import type { RuntimeIntent } from "../src/runtime/types.js";
 import type { PolicyContext } from "../src/runtime/types.js";
 import type { RiskEvaluationContext } from "../src/risk/context.js";
+import type { RuntimeEvent } from "../src/runtime/events.js";
 
 function makeCore(overrides?: {
   executor?: { execute: (i: RuntimeIntent) => Promise<unknown> };
   policyCtx?: PolicyContext;
+  emitEvent?: (event: RuntimeEvent) => void;
 }) {
   const pendingOps = new PendingOperationsTracker();
   const approvalRouter = new ApprovalRouter();
@@ -32,6 +34,7 @@ function makeCore(overrides?: {
       approvalRouter,
       pendingOps,
       executor,
+      emitEvent: overrides?.emitEvent,
       getPolicyContext: () => policyCtx,
       getRiskContext: () => riskCtx,
     }),
@@ -132,6 +135,49 @@ describe("RuntimeCore pipeline", () => {
     expect(calls).toEqual(["requestWhitelistExpansion"]);
   });
 
+  it("rejects a second submitApprovalDecision with the same approval id after successful consume", async () => {
+    const { core } = makeCore({
+      executor: { execute: async () => ({ ok: true }) },
+    });
+    const first = await core.handleIntent(execIntent("requestWhitelistExpansion", { target: "uniswap-v3" }));
+    expect(first.type).toBe("pending_approval");
+    if (first.type !== "pending_approval") throw new Error("expected pending");
+    const approved = await core.submitApprovalDecision(first.approvalId, true);
+    expect(approved.type).toBe("executed");
+    const dup = await core.submitApprovalDecision(first.approvalId, true);
+    expect(dup.type).toBe("rejected");
+    if (dup.type === "rejected") {
+      expect(dup.code).toBe("APPROVAL_ALREADY_CONSUMED");
+    }
+  });
+
+  it("rejects submitApprovalDecision when approval TTL has expired", async () => {
+    const { ApprovalRouter } = await import("../src/runtime/approval-router.js");
+    const approvalRouter = new ApprovalRouter({ defaultApprovalTtlMs: 1 });
+    const pendingOps = new PendingOperationsTracker();
+    const policyCtx: PolicyContext = { lifecycle: "READY", executionPaused: false };
+    const riskCtx: RiskEvaluationContext = { now: 1 };
+    const core = new RuntimeCore({
+      policyGate: new PolicyGate({ whitelist: new WhitelistPolicy(new Set(["pool"])) }),
+      riskEngine: new RiskEngine(),
+      approvalPolicy: new ApprovalPolicy(),
+      approvalRouter,
+      pendingOps,
+      executor: { execute: async () => ({ ok: true }) },
+      getPolicyContext: () => policyCtx,
+      getRiskContext: () => riskCtx,
+    });
+    const first = await core.handleIntent(execIntent("requestWhitelistExpansion", { target: "uniswap-v3" }));
+    expect(first.type).toBe("pending_approval");
+    if (first.type !== "pending_approval") throw new Error("expected pending");
+    await new Promise((r) => setTimeout(r, 25));
+    const expired = await core.submitApprovalDecision(first.approvalId, true);
+    expect(expired.type).toBe("rejected");
+    if (expired.type === "rejected") {
+      expect(expired.code).toBe("APPROVAL_EXPIRED");
+    }
+  });
+
   it("rejects duplicate overlapping governance approvals with same fingerprint", async () => {
     const { core } = makeCore();
     const a = execIntent("requestWhitelistExpansion", { target: "uniswap-v3" });
@@ -187,5 +233,42 @@ describe("RuntimeCore pipeline", () => {
       expect(out.stage).toBe("approval_class");
     }
     expect(executed).toBe(false);
+  });
+
+  it("passes adapter executionEvidence through to executed runtime events", async () => {
+    const events: RuntimeEvent[] = [];
+    const { core } = makeCore({
+      executor: {
+        execute: async () => ({
+          ok: true,
+          executionEvidence: {
+            wallet: {
+              resolvedAddress: "0x1111111111111111111111111111111111111111",
+              source: "managed",
+              chain: "base",
+              reason: "onchain_os_managed_wallet_selected",
+              overrideActive: false,
+            },
+            payment: {
+              mode: "x402_optional",
+              paymentRequired: false,
+              baselineReady: true,
+              paymentAttempted: true,
+              paymentWrapped: true,
+              paymentSettled: true,
+              summary: "wrapped",
+            },
+          },
+        }),
+      },
+      emitEvent: (event) => {
+        events.push(event);
+      },
+    });
+    const out = await core.handleIntent(execIntent("deposit", { amount: "1" }));
+    expect(out.type).toBe("executed");
+    const executed = events.find((event) => event.stage === "executed");
+    expect(executed?.executionEvidence?.wallet?.source).toBe("managed");
+    expect(executed?.executionEvidence?.payment?.paymentWrapped).toBe(true);
   });
 });

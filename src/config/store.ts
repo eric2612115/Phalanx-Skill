@@ -11,6 +11,33 @@ export type ConfigValidator = (full: Readonly<Record<string, string>>) => string
 
 export type RuntimeMode = "dry_run" | "live";
 
+/**
+ * High-level demo / smoke orchestration lane. Service defaults belong in `service.env`;
+ * operators may override in `config.env` (merged with user precedence over service).
+ */
+export type FlowProfileId = "allocation_mainline" | "deposit_only" | "roundtrip" | "rehearsal";
+
+const FLOW_PROFILE_ALIASES: Readonly<Record<string, FlowProfileId>> = {
+  allocation_mainline: "allocation_mainline",
+  "allocation-mainline": "allocation_mainline",
+  deposit_only: "deposit_only",
+  "deposit-only": "deposit_only",
+  roundtrip: "roundtrip",
+  rehearsal: "rehearsal",
+};
+
+export function normalizeFlowProfileId(raw: string | undefined): FlowProfileId {
+  const key = (raw ?? "").trim().toLowerCase().replace(/-/g, "_");
+  if (key.length === 0) {
+    return "allocation_mainline";
+  }
+  return FLOW_PROFILE_ALIASES[key] ?? "allocation_mainline";
+}
+
+export function resolveFlowProfile(values: Readonly<Record<string, string | undefined>>): FlowProfileId {
+  return normalizeFlowProfileId(getConfigEnvValue(values, "PHALANX_FLOW_PROFILE"));
+}
+
 export interface RuntimeReadinessSummary {
   readonly mode: RuntimeMode;
   /**
@@ -65,6 +92,9 @@ export interface RuntimeConfig {
   };
   readonly wallet: {
     readonly testAddress?: string;
+  };
+  readonly flow: {
+    readonly profile: FlowProfileId;
   };
 }
 
@@ -227,6 +257,28 @@ export function getConfigEnvValue(
   return normalizedValue(values, key);
 }
 
+/** Merged-config SSOT for Telegram owner chat id (same precedence as {@link loadRuntimeConfigValues}). */
+export function getTelegramAllowedUserId(
+  values: Readonly<Record<string, string | undefined>>,
+): string | undefined {
+  return getConfigEnvValue(values, "TELEGRAM_ALLOWED_USER_ID");
+}
+
+/**
+ * Synthetic smoke paths require an explicit allowed user id; do not infer `"1"` or other placeholders.
+ */
+export function requireTelegramAllowedUserIdForSyntheticSmoke(
+  values: Readonly<Record<string, string | undefined>>,
+): string {
+  const id = getTelegramAllowedUserId(values);
+  if (id === undefined) {
+    throw new Error(
+      "Synthetic smoke requires TELEGRAM_ALLOWED_USER_ID. Set it in service.env, config.env, or the process environment (merged precedence unchanged). No implicit default is allowed.",
+    );
+  }
+  return id;
+}
+
 export function hasOkxBootstrapCredentials(values: Readonly<Record<string, string | undefined>>): boolean {
   return (
     normalizedValue(values, "OKX_API_KEY") !== undefined &&
@@ -340,7 +392,7 @@ export function buildRuntimeConfig(values: Readonly<Record<string, string | unde
     readiness,
     telegram: {
       botToken: normalizedValue(values, "TELEGRAM_BOT_TOKEN"),
-      allowedUserId: normalizedValue(values, "TELEGRAM_ALLOWED_USER_ID"),
+      allowedUserId: getTelegramAllowedUserId(values),
     },
     okx: {
       apiKey: normalizedValue(values, "OKX_API_KEY"),
@@ -364,6 +416,9 @@ export function buildRuntimeConfig(values: Readonly<Record<string, string | unde
     },
     wallet: {
       testAddress: normalizedValue(values, "TEST_WALLET_ADDRESS"),
+    },
+    flow: {
+      profile: resolveFlowProfile(values),
     },
   };
 }

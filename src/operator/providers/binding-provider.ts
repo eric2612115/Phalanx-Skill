@@ -14,6 +14,9 @@ export interface OperatorBindingSnapshot {
   };
   readonly wallet: {
     readonly executionOrTestAddress?: string;
+    readonly source: ReturnType<PhalanxHost["getOperatorWalletSummary"]>["walletEvidence"]["source"];
+    readonly reason: string;
+    readonly overrideActive: boolean;
   };
   readonly setup: {
     readonly lifecycle: ReturnType<PhalanxHost["getSetupSession"]>["lifecycle"];
@@ -47,6 +50,9 @@ export async function fetchOperatorBindingSnapshot(host: PhalanxHost): Promise<O
     },
     wallet: {
       executionOrTestAddress: wallet.executionOrTestAddress,
+      source: wallet.walletEvidence.source,
+      reason: wallet.walletEvidence.reason,
+      overrideActive: wallet.walletEvidence.overrideActive,
     },
     setup: {
       lifecycle: session.lifecycle,

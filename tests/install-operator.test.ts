@@ -229,6 +229,50 @@ describe("operator init bootstrap", () => {
     }
   });
 
+  it("frames the init report as terminal-only bootstrap through Telegram handoff", () => {
+    const dir = mkdtempSync(join(tmpdir(), "phalanx-init-"));
+    try {
+      writeFileSync(
+        join(dir, "config.env"),
+        ["PHALANX_RUNTIME_MODE=live", "TELEGRAM_BOT_TOKEN=t"].join("\n") + "\n",
+        "utf8",
+      );
+      const text = formatOperatorInitReport(runOperatorInit(dir));
+      expect(text).toMatch(/@BotFather/i);
+      expect(text).toMatch(/npm run init/i);
+      expect(text).toMatch(/npm run dev/i);
+      expect(text.toLowerCase()).toMatch(/telegram/i);
+      expect(text.toLowerCase()).toMatch(/hand off|handoff|continue in telegram|switch to telegram/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("next steps after operator_ready include runtime start and /claim auto-writing TELEGRAM_ALLOWED_USER_ID", () => {
+    const dir = mkdtempSync(join(tmpdir(), "phalanx-init-"));
+    try {
+      const envContent = [
+        "PHALANX_RUNTIME_MODE=live",
+        "TELEGRAM_BOT_TOKEN=tg-token-placeholder",
+        "OKX_API_KEY=k",
+        "OKX_API_SECRET=s",
+        "OKX_API_PASSPHRASE=p",
+        "AGENT_WALLET_ADDRESS=0xcccccccccccccccccccccccccccccccccccccccc",
+      ].join("\n");
+      writeFileSync(join(dir, "config.env"), `${envContent}\n`, "utf8");
+      const result = runOperatorInit(dir);
+      const joined = result.nextSteps.join(" ");
+      expect(joined).toMatch(/npm run dev/i);
+      expect(joined.toLowerCase()).toMatch(/\/claim/);
+      expect(joined).toMatch(/TELEGRAM_ALLOWED_USER_ID/i);
+      expect(joined.toLowerCase()).toMatch(/automatic/);
+      expect(joined.toLowerCase()).toMatch(/userinfobot/);
+      expect(joined.toLowerCase()).toMatch(/not the main path|not the primary path|optional/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("exits non-zero from initExitCode only when operator_ready is false", () => {
     const dir = mkdtempSync(join(tmpdir(), "phalanx-init-"));
     try {
@@ -344,6 +388,29 @@ describe("operator init bootstrap", () => {
       expect(result.configStatus).toBe("missing");
       expect(text).toContain("Config: missing");
       expect(text).toContain("No local config.env or config.env.example found");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("formats EXECUTION_WALLET_SIGNAL guidance as managed-wallet-first with env override secondary", () => {
+    const dir = mkdtempSync(join(tmpdir(), "phalanx-init-"));
+    try {
+      writeFileSync(
+        join(dir, "config.env"),
+        [
+          "PHALANX_RUNTIME_MODE=live",
+          "TELEGRAM_BOT_TOKEN=t",
+          "OKX_API_KEY=k",
+          "OKX_API_SECRET=s",
+          "OKX_API_PASSPHRASE=p",
+        ].join("\n") + "\n",
+        "utf8",
+      );
+      const text = formatOperatorInitReport(runOperatorInit(dir));
+      expect(text).toMatch(/Onchain OS managed wallet/i);
+      expect(text).toMatch(/override/i);
+      expect(text).not.toContain("AGENT_WALLET_ADDRESS / PHALANX_WALLET_ADDRESS / TEST_WALLET_ADDRESS");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

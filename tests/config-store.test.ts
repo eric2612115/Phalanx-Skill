@@ -6,8 +6,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ConfigStore,
   buildRuntimeConfig,
+  getTelegramAllowedUserId,
   hasExecutionWalletSignal,
   loadRuntimeConfigValues,
+  normalizeFlowProfileId,
+  requireTelegramAllowedUserIdForSyntheticSmoke,
+  resolveFlowProfile,
   summarizeRuntimeReadiness,
 } from "../src/config/store";
 import { StrategyStore } from "../src/strategy/store";
@@ -151,6 +155,33 @@ describe("ConfigStore", () => {
     expect(config.mode).toBe("live");
   });
 
+  it("getTelegramAllowedUserId reads TELEGRAM_ALLOWED_USER_ID from merged values", () => {
+    expect(getTelegramAllowedUserId({ TELEGRAM_ALLOWED_USER_ID: " 77 " })).toBe("77");
+    expect(getTelegramAllowedUserId({})).toBeUndefined();
+  });
+
+  it("requireTelegramAllowedUserIdForSyntheticSmoke fails fast when id is absent", () => {
+    expect(() => requireTelegramAllowedUserIdForSyntheticSmoke({})).toThrow(/TELEGRAM_ALLOWED_USER_ID/i);
+    expect(() => requireTelegramAllowedUserIdForSyntheticSmoke({ TELEGRAM_ALLOWED_USER_ID: "" })).toThrow(
+      /TELEGRAM_ALLOWED_USER_ID/i,
+    );
+  });
+
+  it("requireTelegramAllowedUserIdForSyntheticSmoke returns trimmed id when set", () => {
+    expect(requireTelegramAllowedUserIdForSyntheticSmoke({ TELEGRAM_ALLOWED_USER_ID: " 42 " })).toBe("42");
+  });
+
+  it("loadRuntimeConfigValues exposes TELEGRAM_ALLOWED_USER_ID from service.env when not in config.env or process", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "config.env");
+    const servicePath = join(dir, "service.env");
+    writeFileSync(servicePath, "TELEGRAM_ALLOWED_USER_ID=from-service\n", "utf8");
+    writeFileSync(configPath, "OTHER=x\n", "utf8");
+
+    const merged = loadRuntimeConfigValues(configPath, {});
+    expect(getTelegramAllowedUserId(merged)).toBe("from-service");
+  });
+
   it("loadRuntimeConfigValues lets explicit process env override config.env file values", () => {
     const dir = tempDir();
     const path = join(dir, "config.env");
@@ -265,6 +296,47 @@ describe("ConfigStore", () => {
 
     expect(summary.operatorReady).toBe(false);
     expect(summary.operatorMissing).toContain("EXECUTION_WALLET_SIGNAL");
+  });
+
+  describe("flow profile loading", () => {
+    it("normalizes canonical and kebab-case profile ids deterministically", () => {
+      expect(normalizeFlowProfileId(undefined)).toBe("allocation_mainline");
+      expect(normalizeFlowProfileId("")).toBe("allocation_mainline");
+      expect(normalizeFlowProfileId("  ALLOCATION_MAINLINE  ")).toBe("allocation_mainline");
+      expect(normalizeFlowProfileId("allocation-mainline")).toBe("allocation_mainline");
+      expect(normalizeFlowProfileId("deposit_only")).toBe("deposit_only");
+      expect(normalizeFlowProfileId("deposit-only")).toBe("deposit_only");
+      expect(normalizeFlowProfileId("roundtrip")).toBe("roundtrip");
+      expect(normalizeFlowProfileId("rehearsal")).toBe("rehearsal");
+    });
+
+    it("maps unknown profile strings to allocation_mainline deterministically", () => {
+      expect(normalizeFlowProfileId("unknown_demo")).toBe("allocation_mainline");
+    });
+
+    it("resolveFlowProfile reads PHALANX_FLOW_PROFILE from merged values", () => {
+      expect(resolveFlowProfile({ PHALANX_FLOW_PROFILE: "rehearsal" })).toBe("rehearsal");
+      expect(resolveFlowProfile({})).toBe("allocation_mainline");
+    });
+
+    it("keeps config.env authoritative over sibling service.env for PHALANX_FLOW_PROFILE", () => {
+      const dir = tempDir();
+      const configPath = join(dir, "config.env");
+      const servicePath = join(dir, "service.env");
+      writeFileSync(servicePath, "PHALANX_FLOW_PROFILE=rehearsal\n", "utf8");
+      writeFileSync(configPath, "PHALANX_FLOW_PROFILE=deposit_only\n", "utf8");
+
+      const merged = loadRuntimeConfigValues(configPath, {});
+      expect(resolveFlowProfile(merged)).toBe("deposit_only");
+    });
+
+    it("exposes flow.profile on buildRuntimeConfig", () => {
+      const cfg = buildRuntimeConfig({
+        PHALANX_FLOW_PROFILE: "roundtrip",
+        PHALANX_RUNTIME_MODE: "dry_run",
+      });
+      expect(cfg.flow.profile).toBe("roundtrip");
+    });
   });
 });
 

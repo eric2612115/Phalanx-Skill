@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { createPhalanxHost } from "../src/app/host.js";
 import { listOnchainosCapabilities } from "../src/adapters/onchainos.js";
@@ -9,7 +10,7 @@ import {
   planUniswapLiquidityPlannerInvocation,
   runUniswapLiquidityPlannerForPayload,
 } from "../src/adapters/uniswap.js";
-import { loadRuntimeConfigValues } from "../src/config/store.js";
+import { loadRuntimeConfigValues, requireTelegramAllowedUserIdForSyntheticSmoke } from "../src/config/store.js";
 import { mergePolicyItemTargets } from "../src/policy/policy-items.js";
 
 type SmokeOutput = {
@@ -40,6 +41,15 @@ type SmokeOutput = {
 
 function useSyntheticReady(env: NodeJS.ProcessEnv): boolean {
   return (env.PHALANX_SMOKE_SYNTHETIC_READY ?? "").trim() === "1";
+}
+
+export function resolveLiveSmokeSyntheticAllowedUserId(
+  runtimeEnv: Readonly<Record<string, string | undefined>>,
+): string | undefined {
+  if (!useSyntheticReady(runtimeEnv)) {
+    return undefined;
+  }
+  return requireTelegramAllowedUserIdForSyntheticSmoke(runtimeEnv);
 }
 
 function mergeWhitelistTargets(raw: string | undefined): string {
@@ -81,6 +91,7 @@ function extractPlannerPayloadTemplate(
 async function main(): Promise<void> {
   const configPath = process.env.PHALANX_CONFIG_PATH?.trim() || resolve(process.cwd(), "config.env");
   const runtimeEnv = loadRuntimeConfigValues(configPath, process.env);
+  const syntheticTelegramAllowedUserId = resolveLiveSmokeSyntheticAllowedUserId(runtimeEnv);
   const host = createPhalanxHost({
     configValues: runtimeEnv,
   });
@@ -115,13 +126,13 @@ async function main(): Promise<void> {
   const status = await host.invokeMcp("phalanx_status", {});
   output.statusTool = status;
 
-  if (useSyntheticReady(runtimeEnv)) {
+  if (syntheticTelegramAllowedUserId !== undefined) {
     const syntheticHost = createPhalanxHost({
       lifecycle: "READY",
       configValues: {
         ...runtimeEnv,
         PHALANX_RUNTIME_MODE: "live",
-        TELEGRAM_ALLOWED_USER_ID: runtimeEnv.TELEGRAM_ALLOWED_USER_ID ?? "1",
+        TELEGRAM_ALLOWED_USER_ID: syntheticTelegramAllowedUserId,
         WHITELIST_TARGETS: mergeWhitelistTargets(runtimeEnv.WHITELIST_TARGETS),
       },
       executor: {
@@ -206,4 +217,6 @@ async function main(): Promise<void> {
   console.log(JSON.stringify(output, null, 2));
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

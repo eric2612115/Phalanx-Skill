@@ -5,7 +5,12 @@ import {
 } from "../adapters/portfolio.js";
 import type { PortfolioSnapshot } from "../adapters/portfolio.js";
 import type { OnchainosDefiPositionDetail } from "../adapters/portfolio.js";
-import { readOnchainosDefiPositionDetail, readOnchainosDefiPositions } from "../adapters/onchainos.js";
+import {
+  readOnchainosDefiPositionDetail,
+  readOnchainosDefiPositions,
+  resolvePhalanxExecutionWalletAddress,
+  type ResolvePhalanxExecutionWalletAddressHooks,
+} from "../adapters/onchainos.js";
 import { runGuardianCycle, type GuardianCycleResult } from "./cycle.js";
 import type { PhalanxHost } from "../app/host.js";
 
@@ -21,12 +26,14 @@ export interface GuardianServiceDeps {
   readonly logImpl?: (line: string) => void;
 }
 
-export function resolveGuardianPortfolioInputs(
+export async function resolveGuardianPortfolioInputs(
   env: NodeJS.ProcessEnv = process.env,
-): { address?: string; chain: string } {
+  hooks: ResolvePhalanxExecutionWalletAddressHooks = {},
+): Promise<{ address?: string; chain: string }> {
+  const chain = env.PHALANX_GUARDIAN_PORTFOLIO_CHAIN?.trim() || env.PHALANX_DEFAULT_CHAIN?.trim() || "base";
   return {
-    address: env.PHALANX_WALLET_ADDRESS?.trim() || env.TEST_WALLET_ADDRESS?.trim(),
-    chain: env.PHALANX_GUARDIAN_PORTFOLIO_CHAIN?.trim() || env.PHALANX_DEFAULT_CHAIN?.trim() || "base",
+    address: await resolvePhalanxExecutionWalletAddress({ env, chain }, hooks),
+    chain,
   };
 }
 
@@ -65,7 +72,7 @@ export function startGuardianTicker(
 export async function loadGuardianPortfolioFromOnchainos(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<PortfolioSnapshot> {
-  const { address, chain } = resolveGuardianPortfolioInputs(env);
+  const { address, chain } = await resolveGuardianPortfolioInputs(env);
   if (!address) {
     throw new Error("guardian_portfolio_wallet_address_missing");
   }

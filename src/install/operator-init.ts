@@ -51,6 +51,11 @@ function buildNextSteps(
     steps.push("No local config.env or config.env.example found; create one in this directory and re-run init.");
   }
   if (!summary.operatorReady) {
+    if (configStatus !== "missing") {
+      steps.push(
+        "Obtain TELEGRAM_BOT_TOKEN from @BotFather (Telegram) and set it in config.env when filling operator keys.",
+      );
+    }
     steps.push(
       configStatus === "missing"
         ? 'Create a local config.env first, then fill the values listed under "Operator tier — still missing".'
@@ -59,15 +64,18 @@ function buildNextSteps(
     steps.push("Re-run: npm run init");
     return steps;
   }
-  steps.push("Message your Telegram bot in a private chat to run /claim and bind the owner account.");
-  steps.push("After claim, TELEGRAM_ALLOWED_USER_ID is written automatically; keep config.env out of version control.");
+  steps.push("Start the runtime from this shell (npm run dev), then hand off to Telegram: private chat with your bot.");
+  steps.push(
+    "Run /claim in that chat to bind the owner; TELEGRAM_ALLOWED_USER_ID is written to config.env automatically. @userinfobot is not the main path (optional numeric-id lookup only).",
+  );
+  steps.push("Keep config.env out of version control.");
   if (x402BaselineReady) {
     steps.push(
-      "OmRate access: x402 baseline is ready (OKX/onchainos bootstrap + execution wallet present; OMRATE_API_KEY remains optional).",
+      "OmRate access: x402 baseline is ready (OKX/onchainos bootstrap for managed-wallet resolution + OmRate-capable path; OMRATE_API_KEY remains optional).",
     );
   } else if (summary.mode === "live") {
     steps.push(
-      "For x402 baseline: configure OKX credentials and an execution wallet address (AGENT_WALLET_ADDRESS or PHALANX_WALLET_ADDRESS).",
+      "For x402 baseline: configure OKX credentials so AgentPhalanx can resolve an Onchain OS managed wallet per chain; optional PHALANX_WALLET_ADDRESS / AGENT_WALLET_ADDRESS is override-only troubleshooting.",
     );
   }
   if (summary.operatorReady && !summary.demoReady) {

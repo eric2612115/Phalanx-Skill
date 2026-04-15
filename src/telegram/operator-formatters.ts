@@ -1,6 +1,16 @@
 import type { OperatorQueryPayload } from "./operator-queries.js";
+import { detectionsInString } from "../security/detectors.js";
+import { redactString } from "../security/redaction.js";
 
 const TELEGRAM_SOFT_LIMIT = 3_800;
+
+function redactOperatorText(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  const spans = detectionsInString(value);
+  return spans.length > 0 ? redactString(value, spans) : value;
+}
 
 export function formatOperatorQueryPayload(payload: OperatorQueryPayload): string[] {
   const body = formatPayloadBody(payload);
@@ -22,6 +32,8 @@ function formatPayloadBody(payload: OperatorQueryPayload): string {
       return formatEvents(payload.snapshot);
     case "why_blocked_next":
       return formatExplain(payload.snapshot);
+    case "runtime_execution_context":
+      return formatRuntimeExecutionContext(payload.snapshot);
     case "whitelist_policy":
       return formatPolicy(payload.snapshot);
     case "risk_guardian":
@@ -35,9 +47,55 @@ function formatPayloadBody(payload: OperatorQueryPayload): string {
   }
 }
 
+function formatRuntimeExecutionContext(
+  snapshot: Extract<OperatorQueryPayload, { family: "runtime_execution_context" }>["snapshot"],
+): string {
+  if (snapshot.status === "empty") {
+    return ["AgentPhalanx execution context (runtime evidence)", "", snapshot.message].join("\n");
+  }
+  const lines = [
+    "AgentPhalanx execution context (runtime evidence)",
+    "",
+    `Source event: ${snapshot.sourceEventId}`,
+    `Recorded: ${snapshot.createdAt}`,
+    `Action: ${snapshot.sourceAction} (${snapshot.sourceStage})`,
+  ];
+  if (snapshot.wallet) {
+    const w = snapshot.wallet;
+    lines.push(
+      "",
+      "Wallet:",
+      `• address: ${w.resolvedAddress || "<empty>"}`,
+      `• source: ${w.source} chain=${w.chain} override=${w.overrideActive ? "yes" : "no"}`,
+      `• reason: ${w.reason}`,
+    );
+  }
+  if (snapshot.payment) {
+    const p = snapshot.payment;
+    lines.push(
+      "",
+      "Payment / x402:",
+      `• mode=${p.mode} required=${p.paymentRequired} baseline=${p.baselineReady}`,
+      `• attempted=${p.paymentAttempted} wrapped=${p.paymentWrapped} settled=${p.paymentSettled}`,
+      `• summary: ${redactOperatorText(p.summary) ?? p.summary}`,
+    );
+  }
+  if (snapshot.milestones) {
+    const active = (
+      Object.entries(snapshot.milestones) as Array<[string, boolean | undefined]>
+    )
+      .filter(([, v]) => v === true)
+      .map(([k]) => k);
+    if (active.length > 0) {
+      lines.push("", `Milestones: ${active.join(", ")}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 function formatReadiness(snapshot: Extract<OperatorQueryPayload, { family: "readiness_pending" }>["snapshot"]): string {
   const lines = [
-    "Phalanx readiness",
+    "AgentPhalanx readiness",
     "",
     `Mode: ${snapshot.mode}`,
     `Lifecycle: ${snapshot.lifecycle}`,
@@ -55,25 +113,35 @@ function formatReadiness(snapshot: Extract<OperatorQueryPayload, { family: "read
 
 function formatLpPositionDetail(snapshot: Extract<OperatorQueryPayload, { family: "lp_position_detail" }>["snapshot"]): string {
   if (snapshot.status === "unavailable") {
-    return ["Phalanx LP position", "", `Unavailable (${snapshot.code}): ${snapshot.message}`].join("\n");
+    return ["AgentPhalanx LP position", "", `Unavailable (${snapshot.code}): ${snapshot.message}`].join("\n");
   }
-  return [
-    "Phalanx LP position",
+  const lines = [
+    "AgentPhalanx LP position",
     "",
+    snapshot.chain ? `Chain: ${snapshot.chain}` : "",
+    snapshot.protocol ? `Protocol: ${snapshot.protocol}` : "",
+    snapshot.platformId ? `Platform id: ${snapshot.platformId}` : "",
+    snapshot.platformLabel ? `Platform: ${snapshot.platformLabel}` : "",
+    snapshot.token0Symbol && snapshot.token1Symbol ? `Pair: ${snapshot.token0Symbol}/${snapshot.token1Symbol}` : "",
+    snapshot.feeTier ? `Fee tier: ${snapshot.feeTier}` : "",
     `Pool: ${snapshot.poolAddress}`,
     `Token id: ${snapshot.tokenId}`,
     `Ticks: ${snapshot.tickLower} → ${snapshot.tickUpper}`,
+    snapshot.currentTick !== undefined ? `Current tick: ${snapshot.currentTick}` : "",
     `Liquidity: ${snapshot.liquidity}`,
     `In range: ${snapshot.inRange ? "yes" : "no"}`,
+    snapshot.withdrawable !== undefined ? `Withdrawable: ${snapshot.withdrawable ? "yes" : "no"}` : "",
     `Withdraw: ${snapshot.withdrawabilitySummary}`,
-  ].join("\n");
+    snapshot.lastUpdatedAt ? `Last updated: ${snapshot.lastUpdatedAt}` : "",
+  ].filter((line) => line.length > 0);
+  return lines.join("\n");
 }
 
 function formatPortfolio(snapshot: Extract<OperatorQueryPayload, { family: "portfolio_balances" }>["snapshot"]): string {
   if (snapshot.status === "unavailable") {
-    return ["Phalanx portfolio", "", `Unavailable (${snapshot.code}): ${snapshot.message}`].join("\n");
+    return ["AgentPhalanx portfolio", "", `Unavailable (${snapshot.code}): ${snapshot.message}`].join("\n");
   }
-  const lines = ["Phalanx portfolio", "", `Source: ${snapshot.source}`];
+  const lines = ["AgentPhalanx portfolio", "", `Source: ${snapshot.source}`];
   if (snapshot.asOf !== undefined) {
     lines.push(`As of: ${snapshot.asOf}`);
   }
@@ -94,11 +162,35 @@ function formatPortfolio(snapshot: Extract<OperatorQueryPayload, { family: "port
       lines.push(`• ${b.kind}: ${b.currentBps} → ${b.targetBps}`);
     }
   }
+  if (snapshot.postActionFromRuntime) {
+    const pa = snapshot.postActionFromRuntime;
+    lines.push(
+      "",
+      "Portfolio follow-up (latest runtime evidence):",
+      `• action: ${pa.action} @ ${pa.createdAt}`,
+      `• summary: ${redactOperatorText(pa.summary) ?? pa.summary}`,
+    );
+    if (pa.portfolioPushReady !== undefined) {
+      lines.push(`• ready: ${pa.portfolioPushReady ? "yes" : "no"}`);
+    }
+    if (pa.portfolioPushSent !== undefined) {
+      lines.push(`• sent: ${pa.portfolioPushSent ? "yes" : "no"}`);
+    }
+    if (pa.walletSource) {
+      lines.push(`• wallet source: ${pa.walletSource}`);
+    }
+    if (pa.paymentSummary) {
+      lines.push(`• payment summary: ${redactOperatorText(pa.paymentSummary) ?? pa.paymentSummary}`);
+    }
+    if (pa.milestoneLine) {
+      lines.push(`• milestones: ${pa.milestoneLine}`);
+    }
+  }
   return lines.join("\n");
 }
 
 function formatEvents(snapshot: Extract<OperatorQueryPayload, { family: "recent_events" }>["snapshot"]): string {
-  const lines = [`Phalanx events (last ${snapshot.limit})`, ""];
+  const lines = [`AgentPhalanx events (last ${snapshot.limit})`, ""];
   const items = [...snapshot.items].reverse();
   if (items.length === 0) {
     lines.push("No runtime events recorded yet.");
@@ -111,7 +203,7 @@ function formatEvents(snapshot: Extract<OperatorQueryPayload, { family: "recent_
       e.action,
       e.entrySource,
       e.target ? `@${e.target}` : "",
-      e.summary,
+      redactOperatorText(e.summary) ?? e.summary,
     ].filter(Boolean);
     let row = bits.join(" | ");
     if (e.txRefs && e.txRefs.length > 0) {
@@ -125,6 +217,14 @@ function formatEvents(snapshot: Extract<OperatorQueryPayload, { family: "recent_
     } else if (e.demoRun) {
       row += ` | demo: ${e.demoRun.swapPreparation.status}`;
     }
+    if (e.demoRun?.omRateExecutionEvidence.payment) {
+      const p = e.demoRun.omRateExecutionEvidence.payment;
+      row += ` | omrate pay: req=${p.paymentRequired} att=${p.paymentAttempted} wrap=${p.paymentWrapped} set=${p.paymentSettled}`;
+    }
+    if (e.executionEvidence?.payment) {
+      const p = e.executionEvidence.payment;
+      row += ` | payment: req=${p.paymentRequired} att=${p.paymentAttempted} wrap=${p.paymentWrapped} set=${p.paymentSettled}`;
+    }
     lines.push(row);
   }
   if (items.length > 15) {
@@ -135,19 +235,19 @@ function formatEvents(snapshot: Extract<OperatorQueryPayload, { family: "recent_
 
 function formatExplain(snapshot: Extract<OperatorQueryPayload, { family: "why_blocked_next" }>["snapshot"]): string {
   if (!snapshot.hasExplanation) {
-    return ["Phalanx blocked / next steps", "", "No recent blocked or rejected runtime events."].join("\n");
+    return ["AgentPhalanx blocked / next steps", "", "No recent blocked or rejected runtime events."].join("\n");
   }
   return [
-    "Phalanx blocked / next steps",
+    "AgentPhalanx blocked / next steps",
     "",
     `Stage: ${snapshot.stage ?? "unknown"}`,
     snapshot.eventId ? `Event: ${snapshot.eventId}` : "",
     snapshot.code ? `Code: ${snapshot.code}` : "",
     "",
-    `What happened: ${snapshot.whatHappened ?? "n/a"}`,
-    `Why: ${snapshot.why ?? "n/a"}`,
+    `What happened: ${redactOperatorText(snapshot.whatHappened) ?? "n/a"}`,
+    `Why: ${redactOperatorText(snapshot.why) ?? "n/a"}`,
     "",
-    `What next: ${snapshot.whatNext ?? "Review configuration and recent events."}`,
+    `What next: ${redactOperatorText(snapshot.whatNext) ?? "Review configuration and recent events."}`,
   ]
     .filter((line) => line.length > 0)
     .join("\n");
@@ -155,7 +255,7 @@ function formatExplain(snapshot: Extract<OperatorQueryPayload, { family: "why_bl
 
 function formatPolicy(snapshot: Extract<OperatorQueryPayload, { family: "whitelist_policy" }>["snapshot"]): string {
   const lines = [
-    "Phalanx policy",
+    "AgentPhalanx policy",
     "",
     `Lifecycle: ${snapshot.lifecycle}`,
     `Execution paused: ${snapshot.executionPaused ? "yes" : "no"}`,
@@ -169,7 +269,7 @@ function formatPolicy(snapshot: Extract<OperatorQueryPayload, { family: "whiteli
 
 function formatRisk(snapshot: Extract<OperatorQueryPayload, { family: "risk_guardian" }>["snapshot"]): string {
   const parts: string[] = [
-    "Phalanx risk / guardian",
+    "AgentPhalanx risk / guardian",
     "",
     `Risk engine rules: ${snapshot.engineRuleOrder.join(", ")}`,
     `Risk context.now: ${snapshot.riskContext.now}`,
@@ -195,7 +295,7 @@ function formatRisk(snapshot: Extract<OperatorQueryPayload, { family: "risk_guar
 
 function formatBinding(snapshot: Extract<OperatorQueryPayload, { family: "wallets_binding" }>["snapshot"]): string {
   const lines = [
-    "Phalanx binding / wallets",
+    "AgentPhalanx binding / wallets",
     "",
     `Runtime mode: ${snapshot.mode}`,
     `Setup lifecycle: ${snapshot.setup.lifecycle}`,
@@ -208,6 +308,9 @@ function formatBinding(snapshot: Extract<OperatorQueryPayload, { family: "wallet
     "",
     `Owner EVM: ${snapshot.owner.evmAddress ?? "unset"}`,
     `Agent / execution wallet: ${snapshot.wallet.executionOrTestAddress ?? "unset"}`,
+    `Wallet source: ${snapshot.wallet.source}`,
+    `Wallet reason: ${snapshot.wallet.reason}`,
+    `Wallet override active: ${snapshot.wallet.overrideActive ? "yes" : "no"}`,
     "",
     `Base RPC configured: ${snapshot.chain.baseRpcConfigured ? "yes" : "no"}`,
     `xLayer RPC configured: ${snapshot.chain.xlayerRpcConfigured ? "yes" : "no"}`,

@@ -9,7 +9,8 @@ export type DetectionKind =
   | "hex_secret"
   | "high_entropy_token"
   | "base64_blob"
-  | "bearer_token";
+  | "bearer_token"
+  | "email_address";
 
 export interface DetectionSpan {
   kind: DetectionKind;
@@ -25,7 +26,7 @@ const MAX_STRING_SCAN = 96_000;
 
 /** Field names that should never echo raw values (spec + common variants). */
 const SECRET_NAME_RE =
-  /^(?:.*_)?(?:API[_-]?KEY|SECRET|PASSPHRASE|PASSWORD|PRIVATE[_-]?KEY|OTP|AUTHORIZATION|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|BEARER|MNEMONIC|SEED|REFRESH[_-]?TOKEN)(?:_.*)?$/i;
+  /^(?:.*_)?(?:API[_-]?KEY|SECRET|PASSPHRASE|PASSWORD|PRIVATE[_-]?KEY|OTP|AUTHORIZATION|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|BEARER|MNEMONIC|SEED|REFRESH[_-]?TOKEN|LOGIN[_-]?EMAIL)(?:_.*)?$/i;
 
 const SECRET_ENV_TOKENS = new Set([
   "AUTH",
@@ -45,6 +46,7 @@ const SECRET_ENV_TOKEN_PAIRS = new Set([
   "ACCESS_TOKEN",
   "API_KEY",
   "AUTH_TOKEN",
+  "LOGIN_EMAIL",
   "PRIVATE_KEY",
   "REFRESH_TOKEN",
 ]);
@@ -152,6 +154,14 @@ function findHighEntropyTokens(text: string, out: DetectionSpan[]): void {
   }
 }
 
+function findEmailAddresses(text: string, out: DetectionSpan[]): void {
+  const re = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    out.push({ kind: "email_address", start: m.index, end: m.index + m[0]!.length });
+  }
+}
+
 function mergeOverlapping(spans: DetectionSpan[]): DetectionSpan[] {
   if (spans.length === 0) return [];
   const sorted = [...spans].sort((a, b) => a.start - b.start || b.end - a.end);
@@ -181,6 +191,7 @@ export function detectionsInString(text: string): DetectionSpan[] {
   findBearerTokens(slice, raw);
   findBase64Blobs(slice, raw);
   findHighEntropyTokens(slice, raw);
+  findEmailAddresses(slice, raw);
   return mergeOverlapping(raw);
 }
 

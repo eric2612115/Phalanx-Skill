@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createSetupSession,
   handleTelegramUpdate,
@@ -6,7 +9,24 @@ import {
   tryClaimOwner,
 } from "../src/telegram/setup.js";
 
+const originalConfigPath = process.env.PHALANX_CONFIG_PATH;
+
 beforeEach(() => {
+  const isolatedDir = mkdtempSync(join(tmpdir(), "phalanx-owner-claim-"));
+  const isolatedConfigPath = join(isolatedDir, "config.env");
+  const isolatedServicePath = join(isolatedDir, "service.env");
+  writeFileSync(isolatedConfigPath, "", "utf8");
+  writeFileSync(isolatedServicePath, "", "utf8");
+  process.env.PHALANX_CONFIG_PATH = isolatedConfigPath;
+  resetTelegramSetupStateForTests();
+});
+
+afterEach(() => {
+  if (originalConfigPath === undefined) {
+    delete process.env.PHALANX_CONFIG_PATH;
+  } else {
+    process.env.PHALANX_CONFIG_PATH = originalConfigPath;
+  }
   resetTelegramSetupStateForTests();
 });
 

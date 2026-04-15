@@ -6,7 +6,7 @@
 
 **Submission target:** `X Layer Arena`
 
-**Recording target for today:** a stable, replayable deposit live mainline. `withdraw` is an additive win, not the main blocker for recording.
+**Recording target for today:** a stable, replayable deposit live mainline. The full `deposit -> tokenId discovery -> withdraw` roundtrip is now also live-proven, but `deposit` remains the default recording cut because it is the simplest story to replay cleanly. The fuller product story layers in proactive allocation plus `x402` visibility when the demo env is enabled.
 
 ---
 
@@ -73,6 +73,7 @@ The submission should present one dominant story and keep secondary capabilities
   - correct Uniswap V3 pool selection
   - live deposit via `onchainos wallet contract-call`
   - returned tx refs
+  - tokenId discovery and live withdraw in the roundtrip proof
 
 ### How each judging dimension is satisfied
 
@@ -145,11 +146,10 @@ This section is the source of truth for the current delivery state. It should re
 
 ### Still incomplete
 
-- live `withdrawLpPosition` end-to-end closure
-- automatic `tokenId` discovery after deposit and handoff into withdraw
 - fuller Telegram LP position reporting
 - final wallet address resolution model where Onchain OS managed addresses are primary and env values are overrides only
 - a no-override final demo config that can be replayed without ad hoc CLI patching
+- a clearer allocation/x402 rehearsal path that is as replayable as the deposit-default cut
 
 ### Interpretation
 
@@ -236,12 +236,12 @@ Acceptance signal:
 
 ### P1: do if time permits before submission
 
-#### P1.1 Deposit -> tokenId discovery -> withdraw path
+#### P1.1 Allocation / x402 full-story packaging
 
 Why it matters:
 
-- strongest single boost to product completeness
-- changes the project from "can enter LP" to "can manage LP lifecycle"
+- makes the fuller product story as legible as the default deposit cut
+- prevents judges from assuming x402 / proactive allocation are absent just because the default recording path is deposit-first
 
 But:
 
@@ -387,7 +387,7 @@ Recommended answer:
 
 Recommended answer:
 
-`It is a working local-first operator product with a proven live deposit mainline, plus a small number of clearly-scoped remaining enhancements such as withdraw roundtrip and richer position reporting.`
+`It is a working local-first operator product with a proven live deposit mainline and a live-proven withdraw roundtrip, plus a small number of clearly-scoped remaining enhancements such as richer position reporting, managed-wallet cleanup, and stronger allocation/x402 packaging.`
 
 ### `Why no hosted control plane / HA / SaaS management layer?`
 
@@ -403,10 +403,10 @@ The hackathon version should evolve without losing its trust model.
 
 ### Near-term
 
-- finish withdraw roundtrip closure
 - enrich Telegram LP position reporting
 - harden replay scripts and evidence generation
 - make managed wallet resolution the default everywhere
+- package the allocation/x402 story as clearly as the deposit-default recording path
 
 ### Mid-term
 
@@ -445,7 +445,7 @@ This strategy is being followed correctly only if:
 - the product is presented as a local-first Agentic application, not a generic skill pack
 - `Onchain OS`, `Uniswap Skill`, and `OmRate` each have a clear and non-overlapping role
 - the remaining work list is short, concrete, and believable
-- `withdraw` is treated as a bonus completion item, not the main reason the project appears unfinished
+- `withdraw` is not described as unfinished when the current repo state already treats it as live-proven
 
 ---
 
@@ -457,6 +457,6 @@ For the current hackathon window, the recommended execution order is:
 2. create the one-command deposit rehearsal path
 3. realign `README.md` and the live runbook
 4. record the stable deposit mainline
-5. if time remains, push `withdraw` roundtrip and LP detail reporting
+5. if time remains, push allocation/x402 packaging and LP detail reporting
 
 This is the highest-confidence path to a repository that both automated judges and human reviewers can score as credible, coherent, and deserving.

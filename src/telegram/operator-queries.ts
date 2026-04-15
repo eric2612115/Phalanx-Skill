@@ -1,5 +1,6 @@
 import type { PhalanxHost } from "../app/host.js";
 import { fetchOperatorBindingSnapshot } from "../operator/providers/binding-provider.js";
+import { fetchOperatorRuntimeExecutionContextSnapshot } from "../operator/providers/execution-context-provider.js";
 import { fetchOperatorEventSnapshot } from "../operator/providers/event-provider.js";
 import { fetchOperatorExplainSnapshot } from "../operator/providers/explain-provider.js";
 import { fetchOperatorPolicySnapshot } from "../operator/providers/policy-provider.js";
@@ -17,6 +18,10 @@ export type OperatorQueryPayload =
   | { readonly family: "portfolio_balances"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorPortfolioSnapshot>> }
   | { readonly family: "recent_events"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorEventSnapshot>> }
   | { readonly family: "why_blocked_next"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorExplainSnapshot>> }
+  | {
+      readonly family: "runtime_execution_context";
+      readonly snapshot: Awaited<ReturnType<typeof fetchOperatorRuntimeExecutionContextSnapshot>>;
+    }
   | { readonly family: "whitelist_policy"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorPolicySnapshot>> }
   | { readonly family: "risk_guardian"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorRiskSnapshot>> }
   | { readonly family: "wallets_binding"; readonly snapshot: Awaited<ReturnType<typeof fetchOperatorBindingSnapshot>> };
@@ -33,6 +38,8 @@ export async function runOperatorQuery(host: PhalanxHost, family: RoutedOperator
       return { family, snapshot: await fetchOperatorEventSnapshot(host, { limit: 40 }) };
     case "why_blocked_next":
       return { family, snapshot: await fetchOperatorExplainSnapshot(host) };
+    case "runtime_execution_context":
+      return { family, snapshot: await fetchOperatorRuntimeExecutionContextSnapshot(host) };
     case "whitelist_policy":
       return { family, snapshot: await fetchOperatorPolicySnapshot(host) };
     case "risk_guardian":

@@ -60,9 +60,11 @@ export function runInstallChecks(
     ok: !live || walletOk,
     title: "Execution / agentic wallet",
     detail: walletOk
-      ? "address present (AGENT_WALLET_ADDRESS, PHALANX_WALLET_ADDRESS, or TEST_WALLET_ADDRESS)"
+      ? live
+        ? "managed-wallet-first: Onchain OS managed wallet resolution via OKX bootstrap is the primary path; PHALANX_WALLET_ADDRESS / AGENT_WALLET_ADDRESS are override-only troubleshooting pins; TEST_WALLET_ADDRESS stays rehearsal-only"
+        : "dry_run: explicit env pin, rehearsal test wallet, or OKX bootstrap for managed resolution"
       : live
-        ? "set AGENT_WALLET_ADDRESS or PHALANX_WALLET_ADDRESS (or TEST_WALLET_ADDRESS for rehearsal)"
+        ? "live needs OKX credentials for the Onchain OS managed wallet path first; explicit env wallet is troubleshooting-only override; TEST_WALLET_ADDRESS is rehearsal-only"
         : "not required in dry_run",
   });
 

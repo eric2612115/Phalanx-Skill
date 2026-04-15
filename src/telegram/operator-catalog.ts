@@ -8,6 +8,7 @@ export const ROUTED_OPERATOR_FAMILIES = [
   "portfolio_balances",
   "recent_events",
   "why_blocked_next",
+  "runtime_execution_context",
   "whitelist_policy",
   "risk_guardian",
   "wallets_binding",
@@ -27,6 +28,7 @@ export const OPERATOR_FAMILY_LABELS: Readonly<Record<RoutedOperatorFamily, strin
   portfolio_balances: "portfolio / balances / positions / allocation",
   recent_events: "recent events / guardian actions / tx or correlation refs",
   why_blocked_next: "why blocked / what next",
+  runtime_execution_context: "wallet + x402/payment evidence from latest runtime event",
   whitelist_policy: "whitelist / allowlist / policy summary",
   risk_guardian: "risk summary / guardian assessment",
   wallets_binding: "owner wallet / agent wallet / binding summary",
@@ -45,6 +47,16 @@ export const OPERATOR_CATALOG_RULES: readonly OperatorCatalogRule[] = [
       "why am i blocked",
       "why did this block",
       "why blocked",
+    ],
+  },
+  {
+    family: "runtime_execution_context",
+    needles: [
+      "execution context summary",
+      "runtime wallet payment",
+      "wallet source evidence",
+      "x402 summary",
+      "payment summary",
     ],
   },
   {

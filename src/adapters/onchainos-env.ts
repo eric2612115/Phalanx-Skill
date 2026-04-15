@@ -1,0 +1,20 @@
+export function buildOnchainosRuntimeEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): Pick<
+  NodeJS.ProcessEnv,
+  | "OKX_API_KEY"
+  | "OKX_API_SECRET"
+  | "OKX_API_PASSPHRASE"
+  | "OKX_SECRET_KEY"
+  | "OKX_PASSPHRASE"
+  | "OKX_AGENTIC_WALLET_LOGIN_EMAIL"
+> {
+  return {
+    OKX_API_KEY: env.OKX_API_KEY,
+    OKX_API_SECRET: env.OKX_API_SECRET,
+    OKX_API_PASSPHRASE: env.OKX_API_PASSPHRASE,
+    OKX_SECRET_KEY: env.OKX_SECRET_KEY ?? env.OKX_API_SECRET,
+    OKX_PASSPHRASE: env.OKX_PASSPHRASE ?? env.OKX_API_PASSPHRASE,
+    OKX_AGENTIC_WALLET_LOGIN_EMAIL: env.OKX_AGENTIC_WALLET_LOGIN_EMAIL,
+  };
+}

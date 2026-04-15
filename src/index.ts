@@ -17,7 +17,7 @@ function writeStartup(value: unknown, useStdErr = false): void {
 }
 
 /**
- * Phalanx-Skill runtime entry (dry-run host for local dev).
+ * AgentPhalanx runtime entry (Phalanx-Skill dry-run host for local dev).
  */
 export async function main(): Promise<void> {
   const configPath = process.env.PHALANX_CONFIG_PATH?.trim() || resolve(process.cwd(), "config.env");

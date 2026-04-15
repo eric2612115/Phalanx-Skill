@@ -1,11 +1,23 @@
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, InlineKeyboard, Keyboard } from "grammy";
 
 import type { PhalanxHost } from "../app/host.js";
 import type { TelegramReportNotifier } from "../app/host.js";
 import type { RuntimeEvent } from "../runtime/events.js";
+import { SecretGuard } from "../security/secret-guard.js";
+import { detectionsInString } from "../security/detectors.js";
+import { redactString } from "../security/redaction.js";
 import { describeRuntimeAction } from "../runtime/action-labels.js";
 import type { TelegramApprovalNotifier, TelegramApprovalNotifierResult } from "../mcp/server.js";
-import { buildOperatorFallbackReply } from "./fallback.js";
+import {
+  buildOperatorFallbackReply,
+  buildOperatorHelpReply,
+  buildOperatorStartReply,
+  buildPreReadyOperatorShortcutReply,
+  buildTelegramFaqReply,
+  buildTelegramStartKeyboardRows,
+  isOperatorHelpCommand,
+  isOperatorStartCommand,
+} from "./fallback.js";
 import { formatOperatorQueryPayload } from "./operator-formatters.js";
 import { runOperatorQuery } from "./operator-queries.js";
 import { classifyOperatorTelegramText } from "./operator-router.js";
@@ -13,6 +25,35 @@ import { classifyOperatorTelegramText } from "./operator-router.js";
 type SendMessageExtra = {
   reply_markup?: unknown;
 };
+
+const TELEGRAM_OUTPUT_GUARD = new SecretGuard("REDACT_AND_CONTINUE");
+
+function redactTelegramText(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  const spans = detectionsInString(value);
+  return spans.length > 0 ? redactString(value, spans) : value;
+}
+
+function safeTelegramErrorPayload(error: unknown): unknown {
+  if (error instanceof Error) {
+    return TELEGRAM_OUTPUT_GUARD.safeErrorMessage(error);
+  }
+  return TELEGRAM_OUTPUT_GUARD.filterOutput(error).output;
+}
+
+function summarizeTelegramErrorForRuntime(error: unknown): string {
+  const safe = safeTelegramErrorPayload(error);
+  if (typeof safe === "string") {
+    return safe;
+  }
+  try {
+    return JSON.stringify(safe);
+  } catch {
+    return "Telegram delivery failed";
+  }
+}
 
 export interface TelegramMessageSender {
   sendMessage(chatId: number, text: string, extra?: SendMessageExtra): Promise<unknown>;
@@ -23,7 +64,14 @@ export interface TelegramApprovalNotifierDeps {
   sendMessage(chatId: number, text: string, extra?: SendMessageExtra): Promise<unknown>;
 }
 
-export interface TelegramReportNotifierDeps extends TelegramApprovalNotifierDeps {}
+export interface TelegramReportFailureContext {
+  readonly event: RuntimeEvent;
+  readonly errorSummary: string;
+}
+
+export interface TelegramReportNotifierDeps extends TelegramApprovalNotifierDeps {
+  readonly onDeliveryFailure?: (ctx: TelegramReportFailureContext) => void | Promise<void>;
+}
 
 export type GrammyLikeBot = {
   on(event: "message:text" | "callback_query:data", handler: (ctx: any) => Promise<void>): GrammyLikeBot;
@@ -34,6 +82,36 @@ export function buildApprovalKeyboard(approvalId: string): InlineKeyboard {
   return new InlineKeyboard()
     .text("Approve", `phx_approval:approve:${approvalId}`)
     .text("Reject", `phx_approval:reject:${approvalId}`);
+}
+
+export function buildOperatorHelpKeyboard(): Keyboard {
+  return new Keyboard()
+    .text("status")
+    .text("portfolio")
+    .row()
+    .text("recent events")
+    .text("what next")
+    .row()
+    .text("current whitelist")
+    .text("risk summary")
+    .row()
+    .text("agent wallet")
+    .text("x402 summary")
+    .resized();
+}
+
+export function buildOperatorStartKeyboard(): Keyboard {
+  const keyboard = new Keyboard();
+  const rows = buildTelegramStartKeyboardRows();
+  rows.forEach((row, rowIndex) => {
+    row.forEach((label) => {
+      keyboard.text(label);
+    });
+    if (rowIndex < rows.length - 1) {
+      keyboard.row();
+    }
+  });
+  return keyboard.resized();
 }
 
 export function createTelegramApprovalNotifier(
@@ -58,6 +136,52 @@ export function createTelegramApprovalNotifier(
   };
 }
 
+const TELEGRAM_EVIDENCE_LINE_MAX = 280;
+
+function truncateTelegramEvidenceLine(value: string, max = TELEGRAM_EVIDENCE_LINE_MAX): string {
+  if (value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, max - 1)}…`;
+}
+
+function appendRuntimeExecutionContext(lines: string[], event: RuntimeEvent): void {
+  const ee = event.executionEvidence;
+  if (!ee) {
+    return;
+  }
+  const hasWallet = Boolean(ee.wallet);
+  const milestoneEntries =
+    ee.milestones === undefined
+      ? []
+      : (Object.entries(ee.milestones) as Array<[string, boolean | undefined]>).filter(([, v]) => v === true);
+  const hasMilestones = milestoneEntries.length > 0;
+  if (!hasWallet && !hasMilestones) {
+    return;
+  }
+  lines.push("", "Execution context (runtime evidence):");
+  if (hasWallet && ee.wallet) {
+    const w = ee.wallet;
+    lines.push(`• Wallet: ${w.resolvedAddress || "<empty>"}`);
+    lines.push(`  source=${w.source} chain=${w.chain} override=${w.overrideActive ? "yes" : "no"}`);
+    lines.push(`  reason: ${w.reason}`);
+  }
+  if (hasMilestones) {
+    lines.push("", `Milestones: ${milestoneEntries.map(([k]) => k).join(", ")}`);
+  }
+}
+
+function appendRuntimePaymentSummary(lines: string[], event: RuntimeEvent): void {
+  const p = event.executionEvidence?.payment ?? event.demoRun?.omRateExecutionEvidence.payment;
+  if (!p) {
+    return;
+  }
+  lines.push("", "Payment (runtime evidence):");
+  lines.push(`• mode=${p.mode} required=${p.paymentRequired} baseline=${p.baselineReady}`);
+  lines.push(`  attempted=${p.paymentAttempted} wrapped=${p.paymentWrapped} settled=${p.paymentSettled}`);
+  lines.push(`  summary: ${truncateTelegramEvidenceLine(redactTelegramText(p.summary) ?? p.summary)}`);
+}
+
 function appendDemoRunLines(lines: string[], event: RuntimeEvent): void {
   const d = event.demoRun;
   if (!d) {
@@ -70,7 +194,11 @@ function appendDemoRunLines(lines: string[], event: RuntimeEvent): void {
       `• Pool: ${d.selectedPool.pairLabel ?? "n/a"}${d.selectedPool.pairAddress ? ` @ ${d.selectedPool.pairAddress}` : ""}`,
     );
   }
-  lines.push(`• Swap prep: ${d.swapPreparation.status} — ${d.swapPreparation.summary}`);
+  lines.push(
+    `• Swap prep: ${d.swapPreparation.status} — ${
+      redactTelegramText(d.swapPreparation.summary) ?? d.swapPreparation.summary
+    }`,
+  );
   lines.push(
     `• LP lane: ${d.lpExecution.action ?? "n/a"} @ ${d.lpExecution.target ?? "n/a"} (ready: ${d.lpExecution.ready ? "yes" : "no"})`,
   );
@@ -87,32 +215,35 @@ function renderRuntimeExecutionReport(event: RuntimeEvent): string {
       `Action: ${event.action}`,
       `Intent: ${event.intentId}`,
       `Correlation: ${event.correlationId}`,
-      `Summary: ${event.summary}`,
+      `Summary: ${redactTelegramText(event.summary) ?? event.summary}`,
     ];
     if (event.reason) {
-      lines.push(`Reason: ${event.reason}`);
+      lines.push(`Reason: ${redactTelegramText(event.reason) ?? event.reason}`);
     }
     if (event.riskNotes && event.riskNotes.length > 0) {
-      lines.push(`Context: ${event.riskNotes.join(" | ")}`);
+      lines.push(`Context: ${redactTelegramText(event.riskNotes.join(" | ")) ?? event.riskNotes.join(" | ")}`);
     }
+    appendRuntimeExecutionContext(lines, event);
+    appendRuntimePaymentSummary(lines, event);
     appendDemoRunLines(lines, event);
     return lines.join("\n");
   }
-  const lines = [
-    event.stage === "executed" ? "Execution report" : "Execution alert",
-    "",
-    `${event.stage === "executed" ? "Status" : "Outcome"}: ${event.stage}`,
-    `Action: ${event.action}`,
-    `Intent: ${event.intentId}`,
-    `Correlation: ${event.correlationId}`,
-  ];
-  lines.push(`Summary: ${event.summary}`);
+  const title = event.stage === "executed" ? "Execution report" : "Execution alert";
+  const lines = [title, "", `Final status: ${event.stage}`, `Action: ${event.action}`, `Intent: ${event.intentId}`, `Correlation: ${event.correlationId}`];
+  if (event.target) {
+    lines.push(`Target: ${event.target}`);
+  }
+  appendRuntimeExecutionContext(lines, event);
+  appendRuntimePaymentSummary(lines, event);
+  lines.push("", "Action result:");
+  lines.push(redactTelegramText(event.summary) ?? event.summary);
   if (event.reason) {
-    lines.push(`Reason: ${event.reason}`);
+    lines.push(`Reason: ${redactTelegramText(event.reason) ?? event.reason}`);
   }
   if (event.riskNotes && event.riskNotes.length > 0) {
-    lines.push(`Risk: ${event.riskNotes.join(" | ")}`);
+    lines.push(`Risk: ${redactTelegramText(event.riskNotes.join(" | ")) ?? event.riskNotes.join(" | ")}`);
   }
+  appendDemoRunLines(lines, event);
   if (event.txRefs && event.txRefs.length > 0) {
     lines.push("", "Transactions:");
     for (const [index, txRef] of event.txRefs.entries()) {
@@ -123,7 +254,6 @@ function renderRuntimeExecutionReport(event: RuntimeEvent): string {
       }
     }
   }
-  appendDemoRunLines(lines, event);
   return lines.join("\n");
 }
 
@@ -165,7 +295,15 @@ export function createTelegramReportNotifier(
       if (chatId === null) {
         return;
       }
-      await deps.sendMessage(chatId, renderRuntimeExecutionReport(event));
+      try {
+        await deps.sendMessage(chatId, renderRuntimeExecutionReport(event));
+      } catch (error) {
+        console.error("Telegram report delivery failed:", safeTelegramErrorPayload(error));
+        await deps.onDeliveryFailure?.({
+          event,
+          errorSummary: summarizeTelegramErrorForRuntime(error),
+        });
+      }
     },
   };
 }
@@ -200,6 +338,40 @@ function callbackSummary(result: Awaited<ReturnType<PhalanxHost["handleTelegramC
 
 export function registerTelegramBotHandlers(bot: GrammyLikeBot, host: PhalanxHost): void {
   bot.on("message:text", async (ctx) => {
+    const rawForHelp = ctx.message?.text ?? "";
+    const trimmedForHelp = rawForHelp.trim();
+    if (ctx.chat?.type === "private" && isOperatorStartCommand(trimmedForHelp)) {
+      await ctx.reply(buildOperatorStartReply(), {
+        reply_markup: buildOperatorStartKeyboard(),
+      });
+      return;
+    }
+    if (ctx.chat?.type === "private" && isOperatorHelpCommand(trimmedForHelp)) {
+      await ctx.reply(buildOperatorHelpReply(), {
+        reply_markup: buildOperatorHelpKeyboard(),
+      });
+      return;
+    }
+    if (ctx.chat?.type === "private") {
+      const session = host.getSetupSession();
+      if (session.lifecycle === "UNCLAIMED") {
+        const route = classifyOperatorTelegramText(trimmedForHelp);
+        if (route.kind === "query") {
+          await ctx.reply(buildPreReadyOperatorShortcutReply(), {
+            reply_markup: buildOperatorStartKeyboard(),
+          });
+          return;
+        }
+      }
+      const faqReply = buildTelegramFaqReply(trimmedForHelp);
+      if (faqReply) {
+        await ctx.reply(faqReply, {
+          reply_markup: buildOperatorStartKeyboard(),
+        });
+        return;
+      }
+    }
+
     const result = await host.handleTelegramMessage({
       from: ctx.from ? { id: ctx.from.id } : undefined,
       chat: { type: ctx.chat?.type ?? "private" },
@@ -255,7 +427,7 @@ export function registerTelegramBotHandlers(bot: GrammyLikeBot, host: PhalanxHos
   });
 
   bot.catch((error) => {
-    console.error("Telegram bot error:", error);
+    console.error("Telegram bot error:", safeTelegramErrorPayload(error));
   });
 }
 
@@ -291,6 +463,9 @@ export function startTelegramBotPolling(options: StartTelegramBotOptions): {
     },
     sendMessage: async (chatId, text, extra) => {
       await bot.api.sendMessage(chatId, text, extra as never);
+    },
+    onDeliveryFailure: async ({ event, errorSummary }) => {
+      await options.host.recordTelegramReportFailure(event, errorSummary);
     },
   });
 

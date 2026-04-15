@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
-import { ConfigStore, resolveServiceConfigPath } from "../config/store.js";
+import { ConfigStore, getTelegramAllowedUserId, loadRuntimeConfigValues, resolveServiceConfigPath } from "../config/store.js";
+import { readOnchainosManagedWalletAddress } from "../adapters/onchainos.js";
 import type { RuntimeLifecycleState } from "../runtime/types.js";
 import {
   ownerAlreadyClaimedMessage,
@@ -27,11 +28,12 @@ export interface TelegramUpdate {
 }
 
 const WIZARD_ORDER: readonly SetupWizardStep[] = [
+  "collect_login_email",
   "collect_okx",
-  "collect_wallet",
   "collect_omrate",
-  "collect_whitelist",
-  "finalize",
+  "bootstrap_wallet",
+  "confirm_funding",
+  "offer_allocate",
 ] as const;
 
 export function getNextWizardStep(current: SetupWizardStep): SetupWizardStep | null {
@@ -55,10 +57,15 @@ export interface SetupCapabilityContext {
 
 export interface SetupPersistenceContext extends SetupCapabilityContext {}
 
+export interface ReadManagedWalletContext {
+  readonly session: Readonly<SetupSession>;
+}
+
 export interface SetupHooks {
   readonly persistOwnerClaim?: (ctx: OwnerClaimPersistenceContext) => void | Promise<void>;
   readonly validateCapability?: (ctx: SetupCapabilityContext) => string | null | Promise<string | null>;
   readonly persistValidatedStep?: (ctx: SetupPersistenceContext) => void | Promise<void>;
+  readonly readManagedWalletAddress?: (ctx: ReadManagedWalletContext) => Promise<string | null>;
 }
 
 export interface CreateSetupSessionOptions {
@@ -72,12 +79,14 @@ export interface SetupSession {
   pendingOwnerUserId: string | null;
   envAllowedUserId: string | undefined;
   wizardStep: SetupWizardStep | null;
+  pendingLoginEmailChange: "confirm_overwrite" | "awaiting_new_email" | null;
   hooks: SetupHooks;
 }
 
-function defaultAllowedUserId(): string | undefined {
-  const raw = process.env.TELEGRAM_ALLOWED_USER_ID?.trim();
-  return raw && raw.length > 0 ? raw : undefined;
+function mergedTelegramAllowedUserIdFromDisk(): string | undefined {
+  const path = defaultConfigPath();
+  const merged = loadRuntimeConfigValues(path, process.env);
+  return getTelegramAllowedUserId(merged);
 }
 
 function defaultConfigPath(): string {
@@ -101,8 +110,9 @@ export function createSetupSession(options: CreateSetupSessionOptions = {}): Set
     lifecycle: "UNCLAIMED",
     ownerUserId: null,
     pendingOwnerUserId: null,
-    envAllowedUserId: options.envAllowedUserId ?? defaultAllowedUserId(),
+    envAllowedUserId: options.envAllowedUserId ?? mergedTelegramAllowedUserIdFromDisk(),
     wizardStep: null,
+    pendingLoginEmailChange: null,
     hooks: options.hooks ?? createDefaultSetupHooks(),
   };
 }
@@ -150,6 +160,65 @@ export interface HandleTelegramUpdateResult {
   readonly messages: readonly string[];
 }
 
+function isLoginEmailChangeCommand(text: string): boolean {
+  const choice = normalizedChoice(text);
+  return (
+    choice === "change_login_email" ||
+    choice === "update_login_email" ||
+    choice === "change_email" ||
+    choice === "update_email"
+  );
+}
+
+function buildStepAdvanceMessage(
+  step: SetupWizardStep,
+  next: SetupWizardStep,
+  values: Readonly<Record<string, string>>,
+): string {
+  if (step === "bootstrap_wallet") {
+    const address = values.OKX_AGENTIC_WALLET_CURRENT_ADDRESS ?? "unset";
+    return [
+      `Managed wallet confirmed: ${address}`,
+      `Deposit funds into this wallet, then reply \`funded\`. ${setupStepPrompt(next)}`,
+    ].join(" ");
+  }
+  if (step === "confirm_funding") {
+    return `Funding acknowledged. ${setupStepPrompt(next)}`;
+  }
+  return `Step saved. ${setupStepPrompt(next)}`;
+}
+
+async function finalizeStepValues(
+  step: SetupWizardStep,
+  values: Record<string, string>,
+  session: SetupSession,
+): Promise<{ ok: true; values: Record<string, string> } | { ok: false; code: string; detail: string }> {
+  if (step !== "bootstrap_wallet") {
+    return { ok: true, values };
+  }
+  const address = await session.hooks.readManagedWalletAddress?.({ session });
+  if (!address || !hasHexAddress(address)) {
+    return {
+      ok: false,
+      code: "MANAGED_WALLET_UNRESOLVED",
+      detail:
+        "Managed wallet address could not be confirmed yet. Finish the OTP/login flow first, then reply `continue` again.",
+    };
+  }
+  const merged = loadRuntimeConfigValues(defaultConfigPath(), process.env);
+  return {
+    ok: true,
+    values: {
+      ...values,
+      OKX_AGENTIC_WALLET_CURRENT_ADDRESS: address,
+      OKX_AGENTIC_WALLET_ADDRESS_HISTORY: mergeAddressHistory(
+        merged.OKX_AGENTIC_WALLET_ADDRESS_HISTORY,
+        address,
+      ),
+    },
+  };
+}
+
 let claimTail: Promise<unknown> = Promise.resolve();
 
 function enqueueClaim<T>(fn: () => Promise<T>): Promise<T> {
@@ -180,15 +249,27 @@ function parseKeyValueAssignments(text: string): Record<string, string> {
   return out;
 }
 
+function hasBasicEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
 function hasHexAddress(value: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(value);
 }
 
-function parseWhitelistTargets(text: string): string[] {
-  return text
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
+function normalizedChoice(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function mergeAddressHistory(existing: string | undefined, nextAddress: string): string {
+  const seen = new Set(
+    (existing ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0),
+  );
+  seen.add(nextAddress);
+  return [...seen].join(",");
 }
 
 function validateStepInput(
@@ -201,6 +282,16 @@ function validateStepInput(
   }
 
   switch (step) {
+    case "collect_login_email": {
+      if (!hasBasicEmail(t)) {
+        return {
+          ok: false,
+          code: "INVALID_LOGIN_EMAIL",
+          detail: "Invalid login email. Expected a reachable email address for OKX TEE wallet login and OTP.",
+        };
+      }
+      return { ok: true, values: { OKX_AGENTIC_WALLET_LOGIN_EMAIL: t } };
+    }
     case "collect_okx": {
       const pairs = parseKeyValueAssignments(t);
       if (!pairs.OKX_API_KEY || !pairs.OKX_API_SECRET || !pairs.OKX_API_PASSPHRASE) {
@@ -219,49 +310,50 @@ function validateStepInput(
         },
       };
     }
-    case "collect_wallet": {
-      const pairs = parseKeyValueAssignments(t);
-      const wallet = pairs.AGENT_WALLET_ADDRESS ?? t;
-      if (!hasHexAddress(wallet)) {
-        return {
-          ok: false,
-          code: "INVALID_WALLET_INPUT",
-          detail: "Invalid wallet payload. Expected AGENT_WALLET_ADDRESS=0x... with a 20-byte address.",
-        };
-      }
-      return { ok: true, values: { AGENT_WALLET_ADDRESS: wallet } };
-    }
     case "collect_omrate": {
+      if (normalizedChoice(t) === "skip") {
+        return { ok: true, values: {} };
+      }
       const pairs = parseKeyValueAssignments(t);
       if (!pairs.OMRATE_API_KEY) {
         return {
           ok: false,
           code: "INVALID_OMRATE_INPUT",
-          detail: "Invalid OmRate payload. Expected OMRATE_API_KEY=<value>.",
+          detail: "Invalid OmRate payload. Expected OMRATE_API_KEY=<value> or `skip`.",
         };
       }
       return { ok: true, values: { OMRATE_API_KEY: pairs.OMRATE_API_KEY } };
     }
-    case "collect_whitelist": {
-      const targets = parseWhitelistTargets(t);
-      if (targets.length === 0 || targets.some((target) => !/^[A-Za-z0-9._-]+$/.test(target))) {
+    case "bootstrap_wallet": {
+      if (normalizedChoice(t) !== "continue") {
         return {
           ok: false,
-          code: "INVALID_WHITELIST_INPUT",
-          detail: "Invalid whitelist payload. Expected a comma- or newline-separated list of target ids.",
-        };
-      }
-      return { ok: true, values: { WHITELIST_TARGETS: targets.join(",") } };
-    }
-    case "finalize": {
-      if (t.toLowerCase() !== "confirm") {
-        return {
-          ok: false,
-          code: "FINALIZE_NEED_CONFIRM",
-          detail: "Invalid finalize input. Send confirm to complete setup.",
+          code: "BOOTSTRAP_CONTINUE_REQUIRED",
+          detail: "Invalid wallet bootstrap input. Reply `continue` after checking OTP so AgentPhalanx can confirm the managed wallet address.",
         };
       }
       return { ok: true, values: {} };
+    }
+    case "confirm_funding": {
+      if (normalizedChoice(t) !== "funded") {
+        return {
+          ok: false,
+          code: "FUNDING_CONFIRM_REQUIRED",
+          detail: "Invalid funding confirmation. Reply `funded` after assets have been deposited into the managed wallet.",
+        };
+      }
+      return { ok: true, values: {} };
+    }
+    case "offer_allocate": {
+      const choice = normalizedChoice(t);
+      if (choice !== "allocate_now" && choice !== "skip") {
+        return {
+          ok: false,
+          code: "INVALID_ALLOCATE_DECISION",
+          detail: "Invalid allocation decision. Reply `allocate_now` to continue with allocation-oriented flow, or `skip` to finish setup.",
+        };
+      }
+      return { ok: true, values: { AGENTPHALANX_ALLOCATE_DECISION: choice } };
     }
     default:
       return { ok: false, code: "UNKNOWN_STEP", detail: "Unknown setup step." };
@@ -285,10 +377,75 @@ export async function handleTelegramUpdate(
   }
 
   if (session.lifecycle === "READY") {
-    return { nextState: "READY", messages: [] };
+    return handleReadyStateMessage(update, session);
   }
 
   return { nextState: session.lifecycle, messages: [] };
+}
+
+async function handleReadyStateMessage(
+  update: TelegramUpdate,
+  session: SetupSession,
+): Promise<HandleTelegramUpdateResult> {
+  if (!isOwner(update, session)) {
+    return { nextState: "READY", messages: [] };
+  }
+  const raw = update.text ?? "";
+  if (session.pendingLoginEmailChange === "confirm_overwrite") {
+    const choice = normalizedChoice(raw);
+    if (choice === "confirm") {
+      session.pendingLoginEmailChange = "awaiting_new_email";
+      return {
+        nextState: "READY",
+        messages: [
+          "Send the new OKX TEE login email now. This changes the future login / OTP target for managed wallet access.",
+        ],
+      };
+    }
+    if (choice === "cancel") {
+      session.pendingLoginEmailChange = null;
+      return { nextState: "READY", messages: ["Login email change cancelled."] };
+    }
+    return {
+      nextState: "READY",
+      messages: [
+        "Warning: changing the OKX login email can break access to wallets tied to the old email if you did not record it. Reply `confirm` to continue or `cancel` to abort.",
+      ],
+    };
+  }
+  if (session.pendingLoginEmailChange === "awaiting_new_email") {
+    const validation = validateStepInput("collect_login_email", raw);
+    if (!validation.ok) {
+      return { nextState: "READY", messages: [renderSetupError(validation.code, validation.detail)] };
+    }
+    try {
+      await session.hooks.persistValidatedStep?.({
+        step: "collect_login_email",
+        values: validation.values,
+        session,
+      });
+    } catch (err: unknown) {
+      return {
+        nextState: "READY",
+        messages: [renderSetupError("PERSIST_FAILED", err instanceof Error ? err.message : undefined)],
+      };
+    }
+    session.pendingLoginEmailChange = null;
+    return {
+      nextState: "READY",
+      messages: ["OKX login email updated and saved locally."],
+    };
+  }
+  if (isLoginEmailChangeCommand(raw)) {
+    session.pendingLoginEmailChange = "confirm_overwrite";
+    return {
+      nextState: "READY",
+      messages: [
+        "Warning: changing the OKX login email can break access to wallets tied to the old email if you did not record it. Reply `confirm` to continue or `cancel` to abort.",
+      ],
+    };
+  }
+  return { nextState: "READY", messages: [] };
 }
 
 async function handleUnclaimed(
@@ -322,10 +479,10 @@ async function handleUnclaimed(
     session.ownerUserId = actorId;
     session.pendingOwnerUserId = null;
     session.lifecycle = "SETUP_IN_PROGRESS";
-    session.wizardStep = "collect_okx";
+    session.wizardStep = "collect_login_email";
     return {
       nextState: "SETUP_IN_PROGRESS",
-      messages: ["Owner claim confirmed. " + setupStepPrompt("collect_okx")],
+      messages: ["Owner claim confirmed. " + setupStepPrompt("collect_login_email")],
     };
   }
 
@@ -360,10 +517,10 @@ async function handleSetupInProgress(
 
   const step = session.wizardStep;
   if (step === null) {
-    session.wizardStep = "collect_okx";
+    session.wizardStep = "collect_login_email";
     return {
       nextState: "SETUP_IN_PROGRESS",
-      messages: [setupStepPrompt("collect_okx")],
+      messages: [setupStepPrompt("collect_login_email")],
     };
   }
 
@@ -375,10 +532,17 @@ async function handleSetupInProgress(
       messages: [renderSetupError(validation.code, validation.detail)],
     };
   }
+  const finalized = await finalizeStepValues(step, validation.values, session);
+  if (!finalized.ok) {
+    return {
+      nextState: "SETUP_IN_PROGRESS",
+      messages: [renderSetupError(finalized.code, finalized.detail)],
+    };
+  }
 
   const capabilityError = await session.hooks.validateCapability?.({
     step,
-    values: validation.values,
+    values: finalized.values,
     session,
   });
   if (capabilityError !== null && capabilityError !== undefined) {
@@ -388,11 +552,11 @@ async function handleSetupInProgress(
     };
   }
 
-  if (Object.keys(validation.values).length > 0) {
+  if (Object.keys(finalized.values).length > 0) {
     try {
       await session.hooks.persistValidatedStep?.({
         step,
-        values: validation.values,
+        values: finalized.values,
         session,
       });
     } catch (err: unknown) {
@@ -416,36 +580,36 @@ async function handleSetupInProgress(
   session.wizardStep = next;
   return {
     nextState: "SETUP_IN_PROGRESS",
-    messages: [`Step saved. ${setupStepPrompt(next)}`],
+    messages: [buildStepAdvanceMessage(step, next, finalized.values)],
   };
 }
 
 export function createConfigBackedSetupHooks(
   configStore: ConfigStore,
   serviceStore: ConfigStore,
-  overrides: Pick<SetupHooks, "validateCapability"> = {},
+  overrides: Pick<SetupHooks, "validateCapability" | "readManagedWalletAddress"> = {},
 ): SetupHooks {
-  const serviceKeys = new Set(["WHITELIST_TARGETS"]);
+  const loadMergedEnv = (): NodeJS.ProcessEnv =>
+    ({
+      ...serviceStore.getSnapshot().values,
+      ...configStore.getSnapshot().values,
+      ...process.env,
+    }) as NodeJS.ProcessEnv;
   return {
     validateCapability: overrides.validateCapability,
+    readManagedWalletAddress:
+      overrides.readManagedWalletAddress ??
+      (async () => readOnchainosManagedWalletAddress({ chain: "base", env: loadMergedEnv() })),
     persistOwnerClaim: ({ ownerUserId }) => {
       configStore.updateValidated({ TELEGRAM_ALLOWED_USER_ID: ownerUserId }, () => null);
     },
     persistValidatedStep: ({ values }) => {
       const configValues: Record<string, string> = {};
-      const serviceValues: Record<string, string> = {};
       for (const [key, value] of Object.entries(values)) {
-        if (serviceKeys.has(key)) {
-          serviceValues[key] = value;
-        } else {
-          configValues[key] = value;
-        }
+        configValues[key] = value;
       }
       if (Object.keys(configValues).length > 0) {
         configStore.updateValidated(configValues, () => null);
-      }
-      if (Object.keys(serviceValues).length > 0) {
-        serviceStore.updateValidated(serviceValues, () => null);
       }
     },
   };

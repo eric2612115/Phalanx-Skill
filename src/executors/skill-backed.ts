@@ -3,8 +3,16 @@ import type { RuntimeIntent } from "../runtime/types.js";
 import {
   executeOnchainosDefiExecution,
   executeOnchainosSwapExecution,
+  readOnchainosManagedWalletAddress,
   resolvePhalanxExecutionWalletAddress,
 } from "../adapters/onchainos.js";
+import {
+  mergeExecutionMilestones,
+  normalizeWalletEvidence,
+  type ExecutionEvidence,
+  type ExecutionMilestones,
+  type WalletEvidence,
+} from "../runtime/execution-evidence.js";
 import { readOperatorLpPositionDetail } from "../adapters/lp-position-query.js";
 import { executeLpPositionIntent, type ExecuteLpPositionIntentHooks } from "../adapters/lp-execution.js";
 import { executeSweepToOwner, executeWithdrawToOwner } from "../adapters/owner-withdraw.js";
@@ -32,7 +40,7 @@ function stringField(payload: Readonly<Record<string, unknown>>, key: string): s
 }
 
 type ExecutionWalletResolutionResult =
-  | { readonly ok: true; readonly wallet: string }
+  | { readonly ok: true; readonly wallet: string; readonly walletEvidence: WalletEvidence }
   | {
       readonly ok: false;
       readonly mode: "execution_wallet_unresolved";
@@ -40,7 +48,50 @@ type ExecutionWalletResolutionResult =
       readonly action: string;
       readonly chain: string;
       readonly summary: string;
+      readonly walletEvidence: WalletEvidence;
     };
+
+function trimEnvWalletOverride(env: NodeJS.ProcessEnv): string | undefined {
+  const a = (env.PHALANX_WALLET_ADDRESS ?? "").trim();
+  const b = (env.AGENT_WALLET_ADDRESS ?? "").trim();
+  return a || b || undefined;
+}
+
+function chainWalletMilestones(executionWallet: string): ExecutionMilestones {
+  return { wallet_resolved: executionWallet.trim().length > 0 };
+}
+
+function reconcileWalletEvidence(walletEvidence: WalletEvidence, executionWallet: string): WalletEvidence {
+  const effectiveAddress = executionWallet.trim() || walletEvidence.resolvedAddress.trim();
+  if (effectiveAddress === walletEvidence.resolvedAddress) {
+    return walletEvidence;
+  }
+  return {
+    ...walletEvidence,
+    resolvedAddress: effectiveAddress,
+    reason:
+      walletEvidence.reason === "runtime_execution_wallet_selected"
+        ? walletEvidence.reason
+        : "runtime_execution_wallet_selected",
+  };
+}
+
+function withExecutionEvidence<T extends Record<string, unknown>>(
+  result: T,
+  walletEvidence: WalletEvidence,
+  executionWallet: string,
+  ...extraMilestones: ExecutionMilestones[]
+): T & { executionEvidence: ExecutionEvidence } {
+  const consistentWalletEvidence = reconcileWalletEvidence(walletEvidence, executionWallet);
+  const effectiveAddress = consistentWalletEvidence.resolvedAddress.trim();
+  return {
+    ...result,
+    executionEvidence: {
+      wallet: consistentWalletEvidence,
+      milestones: mergeExecutionMilestones(chainWalletMilestones(effectiveAddress), ...extraMilestones),
+    },
+  };
+}
 
 async function resolveExecutionWalletForChain(
   env: NodeJS.ProcessEnv,
@@ -60,6 +111,18 @@ async function resolveExecutionWalletForChain(
   );
 }
 
+async function readManagedWalletForEvidence(
+  env: NodeJS.ProcessEnv,
+  chain: string,
+  impl: CreateSkillBackedExecutorOptions["resolveExecutionWalletAddressImpl"] | undefined,
+): Promise<string | undefined> {
+  if (impl) {
+    return impl({ env, chain });
+  }
+  const r = await readOnchainosManagedWalletAddress({ chain, env });
+  return r ?? undefined;
+}
+
 async function requireExecutionWalletForChain(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly chain: string;
@@ -67,16 +130,40 @@ async function requireExecutionWalletForChain(input: {
   readonly explicitWallet?: string;
   readonly resolveImpl: CreateSkillBackedExecutorOptions["resolveExecutionWalletAddressImpl"];
 }): Promise<ExecutionWalletResolutionResult> {
-  if (input.explicitWallet) {
-    return { ok: true, wallet: input.explicitWallet };
+  const liveMode = (input.env.PHALANX_RUNTIME_MODE ?? "").trim().toLowerCase() === "live";
+  const envOverride = trimEnvWalletOverride(input.env);
+  const payloadExplicit = input.explicitWallet?.trim() || undefined;
+  const testFallback = (input.env.TEST_WALLET_ADDRESS ?? "").trim() || undefined;
+
+  let managed: string | undefined;
+  if (!envOverride) {
+    managed = await readManagedWalletForEvidence(input.env, input.chain, input.resolveImpl);
+  }
+
+  const walletEvidence = normalizeWalletEvidence({
+    liveMode,
+    chain: input.chain,
+    managedAddress: managed,
+    explicitOverride: envOverride,
+    explicitPayload: payloadExplicit,
+    testFallback,
+  });
+
+  if (payloadExplicit) {
+    return { ok: true, wallet: payloadExplicit, walletEvidence };
+  }
+  if (envOverride) {
+    return { ok: true, wallet: envOverride, walletEvidence };
+  }
+  if (managed) {
+    return { ok: true, wallet: managed, walletEvidence };
   }
   const wallet = await resolveExecutionWalletForChain(input.env, input.chain, input.resolveImpl);
   if (wallet) {
-    return { ok: true, wallet };
+    return { ok: true, wallet, walletEvidence };
   }
-  const runtimeMode = (input.env.PHALANX_RUNTIME_MODE ?? "").trim().toLowerCase();
-  if (runtimeMode !== "live") {
-    return { ok: true, wallet: "" };
+  if (!liveMode) {
+    return { ok: true, wallet: "", walletEvidence };
   }
   return {
     ok: false,
@@ -85,7 +172,8 @@ async function requireExecutionWalletForChain(input: {
     action: input.action,
     chain: input.chain,
     summary:
-      "Live execution requires an explicit wallet override or a managed Onchain OS wallet address for the requested chain.",
+      "Live execution prefers an Onchain OS managed wallet for this chain. PHALANX_WALLET_ADDRESS / AGENT_WALLET_ADDRESS are optional override-only pins for troubleshooting, not the default execution path.",
+    walletEvidence,
   };
 }
 
@@ -148,6 +236,7 @@ export function createSkillBackedExecutor(
 
         const results: unknown[] = [];
         const txRefs: string[] = [];
+        let rebalanceExecutionEvidence: ExecutionEvidence | undefined;
         for (const leg of legs) {
           const chain = stringField(leg.payload, "chain") ?? "ethereum";
           const walletResult = await requireExecutionWalletForChain({
@@ -158,7 +247,17 @@ export function createSkillBackedExecutor(
             resolveImpl: resolveWalletImpl,
           });
           if (!walletResult.ok) {
-            return walletResult;
+            return {
+              mode: walletResult.mode,
+              code: walletResult.code,
+              action: walletResult.action,
+              chain: walletResult.chain,
+              summary: walletResult.summary,
+              executionEvidence: {
+                wallet: walletResult.walletEvidence,
+                milestones: mergeExecutionMilestones({ wallet_resolved: false }),
+              },
+            };
           }
           if (leg.action === "deposit") {
             const result = await executeOnchainosDefiExecution(
@@ -169,10 +268,23 @@ export function createSkillBackedExecutor(
                 token: stringField(leg.payload, "token") ?? "",
                 amount: stringField(leg.payload, "amount") ?? "",
                 chain,
+                platformId: stringField(leg.payload, "platformId"),
               },
               env,
             );
-            results.push(result);
+            const segment = stringField(leg.payload, "_allocationSegment");
+            const wrapped = withExecutionEvidence(
+              {
+                ...(result as Record<string, unknown>),
+                ...(segment ? { allocationSegment: segment } : {}),
+              },
+              walletResult.walletEvidence,
+              walletResult.wallet,
+            );
+            if (!rebalanceExecutionEvidence) {
+              rebalanceExecutionEvidence = wrapped.executionEvidence;
+            }
+            results.push(wrapped);
             txRefs.push(...(result.txRefs ?? []));
             continue;
           }
@@ -190,7 +302,15 @@ export function createSkillBackedExecutor(
             },
             env,
           );
-          results.push(result);
+          const wrapped = withExecutionEvidence(
+            { ...(result as Record<string, unknown>) },
+            walletResult.walletEvidence,
+            walletResult.wallet,
+          );
+          if (!rebalanceExecutionEvidence) {
+            rebalanceExecutionEvidence = wrapped.executionEvidence;
+          }
+          results.push(wrapped);
           txRefs.push(...(result.txRefs ?? []));
         }
         return {
@@ -199,6 +319,7 @@ export function createSkillBackedExecutor(
           legs: results,
           txRefs,
           summary: `Executed rebalance with ${results.length} legs`,
+          ...(rebalanceExecutionEvidence ? { executionEvidence: rebalanceExecutionEvidence } : {}),
         };
       }
 
@@ -214,10 +335,37 @@ export function createSkillBackedExecutor(
         intent.action === "getPortfolioStatus" &&
         stringField(intent.payload, "operatorScope") === OPERATOR_LP_POSITION_DETAIL_SCOPE
       ) {
-        return readOperatorLpPositionDetail(intent.payload, env, {
+        const detail = await readOperatorLpPositionDetail(intent.payload, env, {
           resolveExecutionWalletAddressImpl: resolveWalletImpl,
           ...(lpHooks ?? {}),
         });
+        const chain =
+          stringField(intent.payload, "chain")?.trim() ||
+          ((env.PHALANX_DEFAULT_CHAIN ?? "").trim() || "base");
+        const walletResult = await requireExecutionWalletForChain({
+          env,
+          chain,
+          action: intent.action,
+          explicitWallet: stringField(intent.payload, "address"),
+          resolveImpl: resolveWalletImpl,
+        });
+        const executionAddr =
+          walletResult.ok && walletResult.wallet.trim().length > 0
+            ? walletResult.wallet
+            : typeof detail === "object" &&
+                detail !== null &&
+                "address" in detail &&
+                typeof (detail as Record<string, unknown>).address === "string"
+              ? String((detail as Record<string, unknown>).address)
+              : walletResult.walletEvidence.resolvedAddress;
+        if (detail && typeof detail === "object") {
+          return withExecutionEvidence(
+            { ...(detail as Record<string, unknown>) },
+            walletResult.walletEvidence,
+            executionAddr,
+          );
+        }
+        return detail;
       }
 
       if (intent.action === "deposit") {
@@ -231,9 +379,19 @@ export function createSkillBackedExecutor(
           resolveImpl: resolveWalletImpl,
         });
         if (!walletResult.ok) {
-          return walletResult;
+          return {
+            mode: walletResult.mode,
+            code: walletResult.code,
+            action: walletResult.action,
+            chain: walletResult.chain,
+            summary: walletResult.summary,
+            executionEvidence: {
+              wallet: walletResult.walletEvidence,
+              milestones: mergeExecutionMilestones({ wallet_resolved: false }),
+            },
+          };
         }
-        return executeOnchainosDefiExecution(
+        const depositResult = await executeOnchainosDefiExecution(
           {
             kind: "lending_deposit",
             investmentId: stringField(payload, "investmentId") ?? "",
@@ -241,8 +399,14 @@ export function createSkillBackedExecutor(
             token: stringField(payload, "token") ?? "",
             amount: stringField(payload, "amount") ?? "",
             chain,
+            platformId: stringField(payload, "platformId"),
           },
           env,
+        );
+        return withExecutionEvidence(
+          { ...(depositResult as Record<string, unknown>) },
+          walletResult.walletEvidence,
+          walletResult.wallet,
         );
       }
 
@@ -257,9 +421,19 @@ export function createSkillBackedExecutor(
           resolveImpl: resolveWalletImpl,
         });
         if (!walletResult.ok) {
-          return walletResult;
+          return {
+            mode: walletResult.mode,
+            code: walletResult.code,
+            action: walletResult.action,
+            chain: walletResult.chain,
+            summary: walletResult.summary,
+            executionEvidence: {
+              wallet: walletResult.walletEvidence,
+              milestones: mergeExecutionMilestones({ wallet_resolved: false }),
+            },
+          };
         }
-        return executeOnchainosDefiExecution(
+        const withdrawResult = await executeOnchainosDefiExecution(
           {
             kind: "lending_withdraw",
             investmentId: stringField(payload, "investmentId") ?? "",
@@ -273,13 +447,53 @@ export function createSkillBackedExecutor(
           },
           env,
         );
+        return withExecutionEvidence(
+          { ...(withdrawResult as Record<string, unknown>) },
+          walletResult.walletEvidence,
+          walletResult.wallet,
+        );
       }
 
       if (intent.action === "depositLpPosition" || intent.action === "withdrawLpPosition") {
-        return executeLpPositionIntent(intent.action, intent.payload, env, intent.target, {
+        const chain = stringField(intent.payload, "chain") ?? "ethereum";
+        const walletResult = await requireExecutionWalletForChain({
+          env,
+          chain,
+          action: intent.action,
+          explicitWallet: stringField(intent.payload, "address"),
+          resolveImpl: resolveWalletImpl,
+        });
+        if (!walletResult.ok) {
+          return {
+            mode: walletResult.mode,
+            code: walletResult.code,
+            action: walletResult.action,
+            chain: walletResult.chain,
+            summary: walletResult.summary,
+            executionEvidence: {
+              wallet: walletResult.walletEvidence,
+              milestones: mergeExecutionMilestones({ wallet_resolved: false }),
+            },
+          };
+        }
+        const lpResult = await executeLpPositionIntent(intent.action, intent.payload, env, intent.target, {
           resolveExecutionWalletAddressImpl: resolveWalletImpl,
           ...(lpHooks ?? {}),
         });
+        if (lpResult && typeof lpResult === "object" && "provider" in lpResult && lpResult.provider === "onchainos") {
+          return withExecutionEvidence(
+            { ...(lpResult as Record<string, unknown>) },
+            walletResult.walletEvidence,
+            walletResult.wallet,
+          );
+        }
+        return {
+          ...(lpResult as Record<string, unknown>),
+          executionEvidence: {
+            wallet: walletResult.walletEvidence,
+            milestones: mergeExecutionMilestones(chainWalletMilestones(walletResult.wallet)),
+          },
+        };
       }
 
       if (intent.action === "withdrawToOwner") {
@@ -301,9 +515,19 @@ export function createSkillBackedExecutor(
           resolveImpl: resolveWalletImpl,
         });
         if (!walletResult.ok) {
-          return walletResult;
+          return {
+            mode: walletResult.mode,
+            code: walletResult.code,
+            action: walletResult.action,
+            chain: walletResult.chain,
+            summary: walletResult.summary,
+            executionEvidence: {
+              wallet: walletResult.walletEvidence,
+              milestones: mergeExecutionMilestones({ wallet_resolved: false }),
+            },
+          };
         }
-        return executeOnchainosSwapExecution(
+        const swapResult = await executeOnchainosSwapExecution(
           {
             fromTokenAddress: stringField(payload, "fromTokenAddress") ?? "",
             toTokenAddress: stringField(payload, "toTokenAddress") ?? "",
@@ -314,6 +538,11 @@ export function createSkillBackedExecutor(
             slippage: stringField(payload, "slippage"),
           },
           env,
+        );
+        return withExecutionEvidence(
+          { ...(swapResult as Record<string, unknown>) },
+          walletResult.walletEvidence,
+          walletResult.wallet,
         );
       }
 

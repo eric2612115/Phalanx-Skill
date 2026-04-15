@@ -5,6 +5,12 @@ import {
   type OmRateQueryPlanInput,
 } from "../adapters/omrate.js";
 import {
+  buildPaymentEvidenceForOmRateHttpCall,
+  mergeExecutionMilestones,
+  milestonesForOmRateHttpCall,
+  type ExecutionEvidence,
+} from "../runtime/execution-evidence.js";
+import {
   executeUniswapLiquidityPlannerInvocation,
   planUniswapLiquidityPlannerInvocation,
   type UniswapLiquidityPlannerExecutionResult,
@@ -67,6 +73,7 @@ export type RebalanceDemoSwapPreparation = {
 export type RebalanceDemoFlowResult = {
   readonly status: "ok" | "omrate_not_completed" | "planner_not_completed";
   readonly omRate: OmRateQueryExecutionResult;
+  readonly omRateExecutionEvidence: ExecutionEvidence;
   readonly omRateCandidates: readonly OmRateRebalanceCandidate[];
   readonly planner: UniswapLiquidityPlannerExecutionResult;
   readonly selectedPool?: {
@@ -102,6 +109,7 @@ export type RebalanceDemoRunMetadata = {
   readonly tokenB: string;
   readonly flowStatus: RebalanceDemoFlowResult["status"];
   readonly omRateSummary: string;
+  readonly omRateExecutionEvidence: ExecutionEvidence;
   readonly plannerSummary: string;
   readonly selectedPool?: RebalanceDemoFlowResult["selectedPool"];
   readonly swapPreparation: RebalanceDemoSwapPreparation;
@@ -134,6 +142,7 @@ export function buildRebalanceDemoRunMetadata(
     tokenB: input.tokenB,
     flowStatus: flow.status,
     omRateSummary: flow.omRate.summary,
+    omRateExecutionEvidence: flow.omRateExecutionEvidence,
     plannerSummary: flow.planner.summary,
     selectedPool: flow.selectedPool,
     swapPreparation: flow.swapPreparation,
@@ -380,6 +389,27 @@ function buildLpDepositPayloadSeed(params: {
   };
 }
 
+function buildOmRateExecutionEvidence(omRate: OmRateQueryExecutionResult): ExecutionEvidence {
+  const payment = buildPaymentEvidenceForOmRateHttpCall({
+    x402Requested: omRate.x402Requested,
+    paymentRequiredByServer: omRate.paymentRequiredByServer,
+    queryStatus: omRate.status,
+    httpStatus: omRate.httpStatus,
+    paymentWrapped: omRate.paymentWrapped ?? false,
+    fetchSummary: omRate.fetchSummary ?? "omrate_fetch_summary_unavailable",
+    baselineReady: omRate.x402BaselineReady,
+  });
+  return {
+    payment,
+    milestones: mergeExecutionMilestones(
+      milestonesForOmRateHttpCall({
+        queryStatus: omRate.status,
+        payment,
+      }),
+    ),
+  };
+}
+
 export async function runRebalanceDemoFlow(
   input: RebalanceDemoFlowInput,
   deps: RebalanceDemoFlowDeps,
@@ -395,6 +425,7 @@ export async function runRebalanceDemoFlow(
   );
 
   const omRateCandidates = normalizeOmRatePaidResponseToCandidates(parseBodyPreview(omRate.bodyPreview));
+  const omRateExecutionEvidence = buildOmRateExecutionEvidence(omRate);
   const selectedCandidate = pickPrimaryCandidate(omRateCandidates);
   const plannerInput: UniswapLiquidityPlannerInvocationInput = {
     chain: input.chain,
@@ -419,6 +450,7 @@ export async function runRebalanceDemoFlow(
           ? "planner_not_completed"
           : "ok",
     omRate,
+    omRateExecutionEvidence,
     omRateCandidates,
     planner,
     selectedPool,

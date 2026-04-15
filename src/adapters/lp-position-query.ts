@@ -15,11 +15,20 @@ const LP_PLATFORM_HINTS =
 type OperatorLpPositionDetail = {
   readonly poolAddress: string;
   readonly tokenId: string;
+  readonly token0Symbol?: string;
+  readonly token1Symbol?: string;
+  readonly feeTier?: string;
   readonly tickLower: number;
   readonly tickUpper: number;
+  readonly currentTick?: number;
   readonly liquidity: string;
   readonly inRange: boolean;
+  readonly protocol?: string;
   readonly withdrawabilitySummary: string;
+  readonly withdrawable?: boolean;
+  /** Human-readable LP venue label when discovery succeeded (e.g. Uniswap V3). */
+  readonly platformLabel?: string;
+  readonly lastUpdatedAt?: string;
 };
 
 type OperatorLpPositionDetailResult =
@@ -29,6 +38,7 @@ type OperatorLpPositionDetailResult =
       readonly chain: string;
       readonly address: string;
       readonly platformId: string;
+      readonly protocol?: string;
       readonly lpPositionDetail: OperatorLpPositionDetail;
       readonly summary: string;
     }
@@ -140,6 +150,24 @@ function pickDerivedInRange(detailRoot: unknown, tickLower: number, tickUpper: n
   return currentTick >= tickLower && currentTick < tickUpper;
 }
 
+function pickSingleBoolean(value: unknown, keys: readonly string[]): boolean | undefined {
+  const values = collectBooleanCandidates(value, keys);
+  return values.length === 1 ? values[0] : undefined;
+}
+
+function inferLpProtocol(platformLabel: string | undefined, platformId: string): string | undefined {
+  const label = (platformLabel ?? "").trim().toLowerCase();
+  const id = platformId.trim().toLowerCase();
+  const haystack = `${label} ${id}`;
+  if (haystack.includes("uniswap")) return "uniswap-v3";
+  if (haystack.includes("pancake")) return "pancakeswap-v3";
+  if (haystack.includes("aerodrome")) return "aerodrome";
+  if (haystack.includes("curve")) return "curve";
+  if (haystack.includes("sushi")) return "sushiswap";
+  if (haystack.includes("velodrome")) return "velodrome";
+  return undefined;
+}
+
 function buildWithdrawabilitySummary(inRange: boolean): string {
   return inRange
     ? "Fees may be collectible now; principal still requires decreaseLiquidity."
@@ -234,7 +262,8 @@ export async function readOperatorLpPositionDetail(
     };
   }
 
-  const platformId = lpPlatforms[0]!.analysisPlatformId;
+  const chosenPlatform = lpPlatforms[0]!;
+  const platformId = chosenPlatform.analysisPlatformId;
   const readPositionDetail = hooks.readDefiPositionDetailImpl ?? readOnchainosDefiPositionDetail;
   const detail = await readPositionDetail({
     address,
@@ -269,9 +298,16 @@ export async function readOperatorLpPositionDetail(
 
   const poolAddress = pickSingleString(detailRoot, ["poolAddress", "pairAddress", "pool"]);
   const tokenId = pickSingleString(detailRoot, ["tokenId", "nftTokenId"]);
+  const token0Symbol = pickSingleString(detailRoot, ["token0Symbol", "token0", "tokenASymbol", "baseTokenSymbol"]);
+  const token1Symbol = pickSingleString(detailRoot, ["token1Symbol", "token1", "tokenBSymbol", "quoteTokenSymbol"]);
+  const feeTier = pickSingleString(detailRoot, ["feeTier", "fee", "poolFee"]);
   const tickLower = pickSingleNumber(detailRoot, ["tickLower", "tick_lower"]);
   const tickUpper = pickSingleNumber(detailRoot, ["tickUpper", "tick_upper"]);
+  const currentTick = pickSingleNumber(detailRoot, ["currentTick", "tickCurrent", "current_tick"]);
   const liquidity = pickSingleString(detailRoot, ["liquidity", "positionLiquidity"]);
+  const withdrawable =
+    pickSingleBoolean(detailRoot, ["withdrawable", "canWithdraw", "canRemoveLiquidity", "removable"]) ?? true;
+  const lastUpdatedAt = pickSingleString(detailRoot, ["lastUpdatedAt", "updatedAt", "updateTime", "asOf"]);
   const inRange =
     tickLower !== undefined && tickUpper !== undefined ? pickDerivedInRange(detailRoot, tickLower, tickUpper) : undefined;
   if (
@@ -293,20 +329,31 @@ export async function readOperatorLpPositionDetail(
     };
   }
 
+  const platformLabelRaw = stringField(chosenPlatform.platformName);
+  const protocol = stringField(lpPayload.protocol) ?? inferLpProtocol(platformLabelRaw, platformId);
   return {
     provider: "onchainos",
     mode: "operator_lp_position_detail",
     chain,
     address,
     platformId,
+    ...(protocol ? { protocol } : {}),
     lpPositionDetail: {
       poolAddress,
       tokenId,
+      ...(token0Symbol ? { token0Symbol } : {}),
+      ...(token1Symbol ? { token1Symbol } : {}),
+      ...(feeTier ? { feeTier } : {}),
       tickLower,
       tickUpper,
+      ...(currentTick !== undefined ? { currentTick } : {}),
       liquidity,
       inRange,
+      ...(protocol ? { protocol } : {}),
       withdrawabilitySummary: buildWithdrawabilitySummary(inRange),
+      withdrawable,
+      ...(platformLabelRaw ? { platformLabel: platformLabelRaw } : {}),
+      ...(lastUpdatedAt ? { lastUpdatedAt } : {}),
     },
     summary: `Resolved LP position detail for ${platformId}.`,
   };

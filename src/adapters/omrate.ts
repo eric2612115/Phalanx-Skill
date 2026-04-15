@@ -2,7 +2,7 @@
  * OmRate backend query planning and optional live fetch. x402-aware execution uses resolvePaymentAwareFetch.
  */
 
-import { probeHttpWithOptionalX402Payment, resolvePaymentAwareFetch } from "./x402.js";
+import { probeHttpWithOptionalX402Payment, resolvePaymentAwareFetch, x402PaymentAwareSummary } from "./x402.js";
 
 export type OmRateQueryPlanInput = {
   path: string;
@@ -36,6 +36,9 @@ export type OmRateQueryExecutionResult = {
   summary: string;
   bodyPreview?: string;
   fetchSummary?: string;
+  x402Requested: boolean;
+  x402BaselineReady: boolean;
+  paymentRequiredByServer?: boolean;
   paymentWrapped?: boolean;
 };
 
@@ -88,6 +91,9 @@ export type OmRateHttpProbeResult = {
   readonly summary: string;
   readonly httpStatus?: number;
   readonly bodyPreview?: string;
+  readonly x402Requested: boolean;
+  readonly x402BaselineReady: boolean;
+  readonly paymentRequiredByServer?: boolean;
   readonly paymentWrapped: boolean;
   readonly fetchSummary: string;
   readonly env: OmRateAdapterEnvSummary;
@@ -108,6 +114,8 @@ export async function probeOmRateHttp(
       provider: "omrate",
       status: "skipped",
       summary: plan.summary,
+      x402Requested: Boolean(input.x402Aware),
+      x402BaselineReady: omrateX402BaselineReady(env, Boolean(input.x402Aware)),
       paymentWrapped: false,
       fetchSummary: "omrate_base_unconfigured",
       env: envSummary,
@@ -136,6 +144,9 @@ export async function probeOmRateHttp(
     summary: p.summary,
     httpStatus: p.httpStatus,
     bodyPreview: p.bodyPreview,
+    x402Requested: Boolean(input.x402Aware),
+    x402BaselineReady: omrateX402BaselineReady(env, Boolean(input.x402Aware)),
+    paymentRequiredByServer: p.httpStatus === 402 ? true : undefined,
     paymentWrapped: p.paymentWrapped,
     fetchSummary: p.fetchSummary,
     env: envSummary,
@@ -195,6 +206,14 @@ function previewBody(text: string, max = 800): string {
   return t.length <= max ? t : `${t.slice(0, max)}…`;
 }
 
+function omrateX402BaselineReady(env: NodeJS.ProcessEnv, x402Aware: boolean): boolean {
+  if (!x402Aware) {
+    return false;
+  }
+  const s = x402PaymentAwareSummary({}, env);
+  return s.status === "planned" || s.status === "degraded";
+}
+
 /**
  * Perform the planned HTTP request when the plan is executable; otherwise returns skipped with summary.
  */
@@ -209,6 +228,8 @@ export async function executeOmRateQuery(
       provider: "omrate",
       status: "skipped",
       summary: plan.summary,
+      x402Requested: Boolean(input.x402Aware),
+      x402BaselineReady: omrateX402BaselineReady(env, Boolean(input.x402Aware)),
     };
   }
 
@@ -245,25 +266,35 @@ export async function executeOmRateQuery(
     const text = await res.text();
     const bodyPreview = previewBody(text);
 
+    const status = res.ok ? "completed" : "failed";
+    const fs = input.x402Aware ? fetchSummary : "plain_fetch:x402_not_requested";
+    const pw = input.x402Aware ? effectivePaymentWrapped : false;
     return {
       provider: "omrate",
-      status: res.ok ? "completed" : "failed",
+      status,
       httpStatus: res.status,
       summary: res.ok
         ? `http_ok:${res.status}`
         : `http_error:${res.status}:${previewBody(res.statusText || "error", 120)}`,
       bodyPreview: bodyPreview.length > 0 ? bodyPreview : undefined,
-      fetchSummary: input.x402Aware ? fetchSummary : "plain_fetch:x402_not_requested",
-      paymentWrapped: input.x402Aware ? effectivePaymentWrapped : false,
+      x402Requested: Boolean(input.x402Aware),
+      x402BaselineReady: omrateX402BaselineReady(env, Boolean(input.x402Aware)),
+      paymentRequiredByServer: res.status === 402 ? true : undefined,
+      fetchSummary: fs,
+      paymentWrapped: pw,
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    const fs = input.x402Aware ? fetchSummary : "plain_fetch:x402_not_requested";
+    const pw = input.x402Aware ? effectivePaymentWrapped : false;
     return {
       provider: "omrate",
       status: "failed",
       summary: `fetch_failed:${previewBody(msg, 200)}`,
-      fetchSummary: input.x402Aware ? fetchSummary : "plain_fetch:x402_not_requested",
-      paymentWrapped: input.x402Aware ? effectivePaymentWrapped : false,
+      x402Requested: Boolean(input.x402Aware),
+      x402BaselineReady: omrateX402BaselineReady(env, Boolean(input.x402Aware)),
+      fetchSummary: fs,
+      paymentWrapped: pw,
     };
   }
 }

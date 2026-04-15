@@ -47,4 +47,26 @@ describe("memory state store", () => {
     const restored = await store.loadLatestState();
     expect(restored?.userPreferences).toMatchObject({ riskTolerance: "balanced" });
   });
+
+  it("can load a runtime-only snapshot without product preference fields", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "phalanx-memory-"));
+    const store = new McpMemoryStateStore(join(dir, "memory.json"));
+
+    await store.persistRuntimeEventState({
+      updatedAt: "2026-04-15T00:00:00.000Z",
+      source: "runtime_event",
+      actionHistory: [],
+      activeProfileId: "profile-1",
+      activeWalletId: "wallet-2",
+      userPreferences: { riskTolerance: "aggressive" },
+    });
+
+    const runtimeState = await store.loadLatestRuntimeState();
+    expect(runtimeState).toMatchObject({
+      source: "runtime_event",
+      activeProfileId: "profile-1",
+      activeWalletId: "wallet-2",
+    });
+    expect(runtimeState).not.toHaveProperty("userPreferences");
+  });
 });

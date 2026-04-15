@@ -4,6 +4,7 @@ import type { PhalanxMcpDeps } from "./server.js";
 import { buildStatusToolResult } from "./tools/status.js";
 import { invokePortfolioTool } from "./tools/portfolio.js";
 import { invokeActionTool } from "./tools/actions.js";
+import { invokeApprovalDecisionTool } from "./tools/approval-decision.js";
 import { invokeUniswapLiquidityPlanTool } from "./tools/uniswap-liquidity-plan.js";
 
 export interface PhalanxMcpToolDefinition {
@@ -46,6 +47,19 @@ export const PHALANX_MCP_TOOL_REGISTRY = [
         getPolicyContext: deps.getPolicyContext,
         telegramApproval: deps.telegramApproval,
         approvalNotifyTimeoutMs: deps.approvalNotifyTimeoutMs ?? 8_000,
+      }),
+  },
+  {
+    name: "phalanx_approval_decision",
+    description: "Resume or reject a pending approval using the machine-readable approval contract.",
+    inputSchema: z.object({
+      approvalId: z.string(),
+      resumeToken: z.string(),
+      approved: z.boolean(),
+    }),
+    invoke: async (args, deps) =>
+      invokeApprovalDecisionTool(args, {
+        core: deps.core,
       }),
   },
   {

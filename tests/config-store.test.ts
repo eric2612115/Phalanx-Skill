@@ -14,6 +14,7 @@ import {
   resolveFlowProfile,
   summarizeRuntimeReadiness,
 } from "../src/config/store";
+import { loadSkillBootstrapConfig } from "../src/config/runtime-config";
 import { StrategyStore } from "../src/strategy/store";
 
 afterEach(() => {
@@ -196,6 +197,23 @@ describe("ConfigStore", () => {
     expect(merged.PHALANX_RUNTIME_MODE).toBe("dry_run");
     expect(merged.TELEGRAM_BOT_TOKEN).toBe("env-token");
     expect(merged.OTHER).toBe("1");
+  });
+
+  it("loadSkillBootstrapConfig packages kernel startup paths without requiring Telegram ownership", () => {
+    const dir = tempDir();
+    const configPath = join(dir, "config.env");
+    writeFileSync(
+      configPath,
+      "PHALANX_RUNTIME_MODE=live\nOKX_API_KEY=okx-key\nOKX_API_SECRET=okx-secret\nOKX_API_PASSPHRASE=okx-pass\n",
+      "utf8",
+    );
+
+    const bootstrap = loadSkillBootstrapConfig(configPath, {});
+    expect(bootstrap.configPath).toBe(configPath);
+    expect(bootstrap.serviceConfigPath).toBe(join(dir, "service.env"));
+    expect(bootstrap.runtimeStatePath).toBe(join(dir, "runtime-memory.json"));
+    expect(bootstrap.values.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(bootstrap.runtimeConfig.telegram.botToken).toBeUndefined();
   });
 
   it("merges sibling service.env before config.env so user config stays authoritative", () => {

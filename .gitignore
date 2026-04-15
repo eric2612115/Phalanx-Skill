@@ -2,6 +2,7 @@
 .env
 config.env
 service.env
+runtime-memory.json
 .venv/
 node_modules/
 dist/

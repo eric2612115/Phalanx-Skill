@@ -32,6 +32,10 @@ describe("repo layout", () => {
     expect(existsSync(join(root, "vitest.config.ts"))).toBe(true);
   });
 
+  it("includes the active kernel migration matrix", () => {
+    expect(existsSync(join(root, "docs", "kernel-migration-matrix.md"))).toBe(true);
+  });
+
   it("does not execute main when imported", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const entryUrl = pathToFileURL(join(root, "src", "index.ts")).href;

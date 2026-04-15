@@ -108,6 +108,7 @@ At runtime the kernel receives a bounded action request, validates it through po
 
 - `completed` with execution evidence
 - `pending_approval` with resume metadata
+- `approval_resolution` after a host such as `DePhalanx` calls `phalanx_approval_decision`
 - explicit failure when the route is unsupported or blocked
 
 This makes `Phalanx-Skill` the execution truth layer while letting `DePhalanx` own the operator conversation and approval UX.

@@ -134,6 +134,11 @@ describe("MCP cross-channel approval", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error("expected pending approval");
     expect(out.data.kind).toBe("pending_approval");
+    expect(out.data.resumeToken).toBe(out.data.approvalId);
+    expect(out.data.intentId).toBeTruthy();
+    expect(out.data.originatingIntentId).toBeTruthy();
+    expect(out.data.executionSegment).toBeTruthy();
+    expect(out.data.expiresAt).toBeTruthy();
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]?.[0]?.summary).toContain("Requested action: swap");
     expect(notify.mock.calls[0]?.[0]?.summary).toContain(
@@ -160,6 +165,7 @@ describe("MCP cross-channel approval", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error("expected ok");
     expect(out.data.kind).toBe("pending_approval");
+    expect(out.data.resumeToken).toBe(out.data.approvalId);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]?.[0]?.summary).toContain("Requested action: requestWhitelistExpansion");
     expect(notify.mock.calls[0]?.[0]?.summary).toContain("Blocked target: uniswap-v3");
@@ -195,6 +201,7 @@ describe("MCP cross-channel approval", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error("expected pending approval");
     expect(out.data.kind).toBe("pending_approval");
+    expect(out.data.resumeToken).toBe(out.data.approvalId);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]?.[0]?.summary).toContain("Requested action: add liquidity (LP deposit)");
     expect(notify.mock.calls[0]?.[0]?.summary).toContain("Blocked target: uniswap-v3");
@@ -224,6 +231,7 @@ describe("MCP cross-channel approval", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error("expected pending approval");
     expect(out.data.kind).toBe("pending_approval");
+    expect(out.data.resumeToken).toBe(out.data.approvalId);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]?.[0]?.summary).toContain("Requested action: withdraw to owner");
     expect(notify.mock.calls[0]?.[0]?.summary).toContain(
@@ -250,6 +258,7 @@ describe("MCP cross-channel approval", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error("expected ok");
     expect(out.data.kind).toBe("pending_approval");
+    expect(out.data.resumeToken).toBe(out.data.approvalId);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(deps.approvalRouter.size()).toBe(1);
   });
@@ -380,6 +389,59 @@ describe("MCP unknown tool", () => {
 });
 
 describe("MCP approval resume safety", () => {
+  it("resumes pending approval through the explicit MCP approval tool", async () => {
+    const notify = vi.fn<TelegramApprovalNotifier["sendApprovalRequest"]>(async () => ({ ok: true }));
+    const deps = makeMcpDeps({
+      telegramApproval: { sendApprovalRequest: notify },
+      whitelistTargets: ["whitelist-admin"],
+      approvalNotifyTimeoutMs: 200,
+    });
+
+    const first = await invokePhalanxMcpTool(
+      "phalanx_action",
+      { action: "requestWhitelistExpansion", payload: { target: "uniswap-v3" }, target: "whitelist-admin" },
+      deps,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok || first.data.kind !== "pending_approval") throw new Error("expected pending");
+
+    const resumed = await invokePhalanxMcpTool(
+      "phalanx_approval_decision",
+      {
+        approvalId: first.data.approvalId,
+        resumeToken: first.data.resumeToken,
+        approved: true,
+      },
+      deps,
+    );
+
+    expect(resumed.ok).toBe(true);
+    if (!resumed.ok) throw new Error("expected resumed result");
+    expect(resumed.data).toMatchObject({
+      kind: "approval_resolution",
+      approvalId: first.data.approvalId,
+      resumeToken: first.data.resumeToken,
+      status: "executed",
+    });
+  });
+
+  it("rejects approval resumes when the resume token does not match", async () => {
+    const deps = makeMcpDeps();
+    const resumed = await invokePhalanxMcpTool(
+      "phalanx_approval_decision",
+      {
+        approvalId: "approval-1",
+        resumeToken: "wrong-token",
+        approved: true,
+      },
+      deps,
+    );
+
+    expect(resumed.ok).toBe(false);
+    if (resumed.ok) throw new Error("expected fail");
+    expect(resumed.code).toBe("INVALID_RESUME_TOKEN");
+  });
+
   it("rejects duplicate submitApprovalDecision after whitelist governance completed", async () => {
     const notify = vi.fn<TelegramApprovalNotifier["sendApprovalRequest"]>(async () => ({ ok: true }));
     const deps = makeMcpDeps({
@@ -396,6 +458,7 @@ describe("MCP approval resume safety", () => {
     expect(first.ok).toBe(true);
     if (!first.ok || first.data.kind !== "pending_approval") throw new Error("expected pending");
     const approvalId = first.data.approvalId;
+    expect(first.data.resumeToken).toBe(approvalId);
 
     const once = await deps.core.submitApprovalDecision(approvalId, true);
     expect(once.type).toBe("executed");

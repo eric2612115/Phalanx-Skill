@@ -642,6 +642,7 @@ describe("mcp live transport", () => {
       "phalanx_status",
       "phalanx_portfolio",
       "phalanx_action",
+      "phalanx_approval_decision",
       "phalanx_uniswap_liquidity_plan",
     ]);
 

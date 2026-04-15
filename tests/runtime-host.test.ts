@@ -3,6 +3,15 @@ import { buildPortfolioSnapshot } from "../src/adapters/portfolio.ts";
 import { runGuardianCycle } from "../src/guardian/cycle.ts";
 
 describe("runtime host integration", () => {
+  it("creates a skill host without channel ownership", async () => {
+    const { createSkillHost } = await import("../src/app/skill-host.ts");
+
+    const host = createSkillHost({ lifecycle: "READY", configValues: {} });
+    expect(host.runtime).toBeDefined();
+    expect(host.telegram).toBeUndefined();
+    expect(host.guardian).toBeUndefined();
+  });
+
   it("restores active wallet and pending jobs from memory state on restart", async () => {
     const { createPhalanxHost } = await import("../src/app/host.ts");
 

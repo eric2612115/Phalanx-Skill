@@ -13,6 +13,8 @@ describe("AgentPhalanx outward-facing branding", () => {
   it("documents the product name AgentPhalanx in README while keeping PHALANX_* env compatibility documented", () => {
     const readme = read("README.md");
     expect(readme).toMatch(/AgentPhalanx/);
+    expect(readme).toMatch(/Phalanx-Skill/);
+    expect(readme).toMatch(/secure DeFi action kernel/i);
     expect(readme).toMatch(/PHALANX_/);
   });
 
@@ -49,6 +51,13 @@ describe("AgentPhalanx outward-facing branding", () => {
     expect(read("AGENTS.md")).toMatch(/AgentPhalanx/);
     expect(read("CLAUDE.md")).toMatch(/AgentPhalanx/);
     expect(read("docs/agent-pack/DECISIONS.md")).toMatch(/shared root docs|README\.md|AGENTS\.md|CLAUDE\.md/);
+  });
+
+  it("documents the kernel split and migration map in active repo docs", () => {
+    expect(read("README.md")).toMatch(/Telegram ownership.*DePhalanx|mission loops.*DePhalanx/is);
+    expect(read("AGENTS.md")).toMatch(/kernel-migration-matrix\.md/);
+    expect(read("CLAUDE.md")).toMatch(/kernel-migration-matrix\.md/);
+    expect(read("docs/kernel-migration-matrix.md")).toMatch(/move_to_dephalanx/);
   });
 
   it("keeps MCP example wiring on PHALANX_* env keys for compatibility", () => {

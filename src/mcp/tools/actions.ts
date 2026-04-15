@@ -8,6 +8,7 @@ import { isStateChangingAction } from "../../runtime/intents.js";
 import { describeRuntimeAction } from "../../runtime/action-labels.js";
 import type { McpToolResult, TelegramApprovalNotifier } from "../server.js";
 import { asRecord } from "../tool-args.js";
+import { toPendingApprovalContract } from "../../contracts/pending-approval.js";
 
 export interface ActionToolDeps {
   readonly core: RuntimeCore;
@@ -223,6 +224,15 @@ export async function invokeActionTool(args: Record<string, unknown>, deps: Acti
     }
     if (governanceOut.type === "pending_approval") {
       const approvalId = governanceOut.approvalId;
+      const pendingApproval = deps.approvalRouter.get(approvalId);
+      if (!pendingApproval) {
+        rollbackPendingApproval(deps.approvalRouter, deps.pendingOps, approvalId);
+        return {
+          ok: false,
+          code: "APPROVAL_STATE_MISSING",
+          message: "Pending approval record disappeared before notification could be delivered.",
+        };
+      }
       if (deps.telegramApproval === undefined) {
         rollbackPendingApproval(deps.approvalRouter, deps.pendingOps, approvalId);
         return {
@@ -265,11 +275,10 @@ export async function invokeActionTool(args: Record<string, unknown>, deps: Acti
       }
       return {
         ok: true,
-        data: {
-          kind: "pending_approval" as const,
-          approvalId,
-          message: "Approval requested via Telegram; whitelist update must complete before execution resumes.",
-        },
+        data: toPendingApprovalContract(
+          pendingApproval,
+          "Approval requested via Telegram; whitelist update must complete before execution resumes.",
+        ),
       };
     }
   }
@@ -283,6 +292,15 @@ export async function invokeActionTool(args: Record<string, unknown>, deps: Acti
   }
 
   const approvalId = out.approvalId;
+  const pendingApproval = deps.approvalRouter.get(approvalId);
+  if (!pendingApproval) {
+    rollbackPendingApproval(deps.approvalRouter, deps.pendingOps, approvalId);
+    return {
+      ok: false,
+      code: "APPROVAL_STATE_MISSING",
+      message: "Pending approval record disappeared before notification could be delivered.",
+    };
+  }
 
   if (deps.telegramApproval === undefined) {
     rollbackPendingApproval(deps.approvalRouter, deps.pendingOps, approvalId);
@@ -328,10 +346,9 @@ export async function invokeActionTool(args: Record<string, unknown>, deps: Acti
 
   return {
     ok: true,
-    data: {
-      kind: "pending_approval" as const,
-      approvalId,
-      message: "Approval requested via Telegram; respond on the bot to continue.",
-    },
+    data: toPendingApprovalContract(
+      pendingApproval,
+      "Approval requested via Telegram; respond on the bot to continue.",
+    ),
   };
 }

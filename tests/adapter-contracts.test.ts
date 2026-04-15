@@ -202,6 +202,14 @@ describe("whitelist-contract", () => {
 });
 
 describe("omrate adapter (contract)", () => {
+  it("documents OmRate in the skill as execution-side support rather than product research ownership", () => {
+    const readme = readFileSync(join(process.cwd(), "README.md"), "utf8");
+    expect(readme).toMatch(/high-level `MCP \/ API \/ action` surface|What this repo owns/);
+    expect(readme).toMatch(/OmRate/);
+    expect(readme).toMatch(/moves out|DePhalanx/);
+    expect(readme).not.toMatch(/portfolio research client/i);
+  });
+
   it("planOmRateQuery is x402-aware conceptually without requiring credentials", () => {
     const withX = planOmRateQuery(
       { path: "/v1/foo", method: "GET", x402Aware: true },

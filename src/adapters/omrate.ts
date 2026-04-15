@@ -1,5 +1,11 @@
 /**
- * OmRate backend query planning and optional live fetch. x402-aware execution uses resolvePaymentAwareFetch.
+ * Execution-side OmRate adapter.
+ *
+ * This module stays in `Phalanx-Skill` only for action-kernel needs:
+ * planning live request parameters, normalizing fetch behavior, and handling
+ * x402/payment evidence required by supported execution flows.
+ *
+ * Product-side opportunity discovery and portfolio research belong in `DePhalanx`.
  */
 
 import { executeAgenticX402HttpRequest, type ExecuteAgenticX402HttpRequestDeps } from "./x402-agentic-payment.js";

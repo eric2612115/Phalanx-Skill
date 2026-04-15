@@ -7,6 +7,7 @@ import {
   type RuntimeMemoryState,
   type StateStore,
 } from "./state-store.js";
+import { toRuntimeStateSnapshot, type RuntimeStateStore, type RuntimeStateSnapshot } from "../state/runtime-state-store.js";
 
 function atomicWrite(path: string, data: string): void {
   const tmp = `${path}.${process.pid}.tmp`;
@@ -14,7 +15,7 @@ function atomicWrite(path: string, data: string): void {
   renameSync(tmp, path);
 }
 
-export class McpMemoryStateStore implements StateStore {
+export class McpMemoryStateStore implements StateStore, RuntimeStateStore {
   constructor(private readonly filePath: string) {}
 
   async loadLatestState(): Promise<RuntimeMemoryState | null> {
@@ -60,5 +61,9 @@ export class McpMemoryStateStore implements StateStore {
       activeWalletId: current?.activeWalletId,
       pendingJobs: current?.pendingJobs ?? [],
     };
+  }
+
+  async loadLatestRuntimeState(): Promise<RuntimeStateSnapshot | null> {
+    return toRuntimeStateSnapshot(await this.loadLatestState());
   }
 }
